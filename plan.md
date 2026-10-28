@@ -1,0 +1,182 @@
+# IELTS SPEAKING PRACTICE — Living Plan
+
+> **Rule:** Append a Change Log entry after **every** file touch, however small.
+> Format: `YYYY-MM-DD | file | change | reason | verification`
+
+---
+
+## 1. Decisions (append-only, confirmed with the user)
+
+- **2026-10-29 | Copy, not move** — New app gets its own copy of SODA's UI (`src/`, `public/`, configs). SODA root stays untouched and runnable.
+- **2026-10-29 | Public, isolated sessions** — One Gemini Live AudioLoop per socket (`sid`). Visitors never share audio/scores. `MAX_SESSIONS` cap (default 5).
+- **2026-10-29 | Audio-based pronunciation** — Buffer each spoken answer (16 kHz PCM → WAV), send to Gemini (`gemini-2.5-flash`, env `PRONUNCIATION_MODEL`) for a real Pronunciation band + notes. Text-only heuristics only as fallback when audio is unavailable.
+- **2026-10-29 | Supabase persistence** — New `ielts_clients` / `ielts_sessions` / `ielts_answers` tables via existing `SUPABASE_DB_URL` pooler. Anonymous `client_id` (UUID in localStorage). Local JSONL fallback when DB unset.
+- **2026-10-29 | Folder** — `D:\soda-main-master\soda-main-master\ielts-speaking-practice\` (no spaces; avoids build breakage). App title shown to users: **IELTS SPEAKING PRACTICE**. Own git repo; SODA `.gitignore` gets one line `ielts-speaking-practice/`.
+- **2026-10-29 | Deploy scope** — Build + verify locally, then deploy for the user: new Render backend (Docker) + new Netlify site, then live smoke test.
+- **2026-10-29 | Scope** — ONLY IELTS Speaking. No writing/reading/vocab/listening modules, no wake word, no camera/desktop tools, no accounts. Spelling+grammar corrections shown as *transcript corrections* (speaking has no spelling criterion); scoring uses the 4 official criteria only.
+- **2026-10-29 | Voice parity** — Same pipeline as SODA: Gemini Live `models/gemini-3.1-flash-live-preview`, voice "Charon", server VAD, echo-safe mic mute, browser mic → `browser_audio` → backend, `audio_data` PCM playback at 24 kHz, `mic_level`, `speaking_state`, `transcription` events.
+
+---
+
+## 2. Architecture
+
+```
+Browser (Netlify)
+  src/  — trimmed SODA HUD: orb + transcript + Start/End + IELTS panels
+    │ socket.io  (events allowlist)
+    ▼
+Backend (Render, Docker python:3.11-slim)
+  server.py   FastAPI + Socket.IO, per-sid Session registry, /status
+  voice.py    slim AudioLoop: queues, VAD, transcriptions, tool dispatch
+  examiner.py test FSM: idle → part1 → part2(prep/speak) → part3 → finished
+  evaluation.py  DeepSeek (text 3 criteria) ∥ Gemini (pronunciation from WAV)
+  rubric.py   official 0–9 descriptors × 4 criteria, half-band rounding
+  question_bank.py  Part 1 topics / Part 2 cue cards / Part 3 follow-ups
+  ielts_tools.py    Gemini function declarations (7 tools only)
+  prompts.py  examiner system prompt + evaluation prompts
+  store.py    Supabase ielts_* tables → JSONL fallback
+    │
+    ├─ Gemini Live (voice conversation + tool calls)
+    ├─ DeepSeek API (band text evaluation)
+    ├─ Gemini generate_content (pronunciation, audio part)
+    └─ Supabase Postgres (progress/history)
+```
+
+### Only-IELTS enforcement (4 layers)
+1. Gemini `tools=` = `start_test, repeat_question, evaluate_answer, next_question, finish_test, set_goal, get_progress` only.
+2. System prompt: certified IELTS examiner, English only, exact-text-to-speak protocol, "no other abilities — steer back to the test".
+3. Backend socket allowlist: `connect, disconnect, start_audio, stop_audio, browser_audio, run_ielts_tool, ping`. Unknown events rejected. `run_ielts_tool` re-checks the 7-tool allowlist.
+4. Frontend: all non-IELTS panels/hooks/animations deleted.
+
+### Exam flow
+1. **Start Practice** click (user gesture → mic permission) → `start_audio {client_id}` → examiner greets, offers full mock / single part.
+2. Part 1: 3–4 questions, evaluate after each (spoken band + one top correction → next question).
+3. Part 2: cue card panel + 60 s prep countdown → 2-min long turn → one evaluation.
+4. Part 3: 4–5 discussion questions.
+5. `finish_test` → final report panel (per-part + overall, corrections, strengths, tips) + spoken summary → saved to Supabase.
+
+### Scoring
+- Criteria: Fluency & Coherence, Lexical Resource, Grammatical Range & Accuracy, Pronunciation (full 0–9 descriptors in `rubric.py`).
+- Overall = mean of 4 → round to nearest **0.5**. Part band = mean of its answers (rounded). Final = mean of part bands (rounded). Documented approximation of examiner judgement.
+- Evaluation robustness: answer text owned by backend (from `input_transcription`, NOT model-supplied); PCM buffer owned by backend; if model skips `evaluate_answer` and calls `next_question`/`finish_test`, pending answer is evaluated first; JSON extraction (```json fence → brace slice) + 1 retry + heuristic fallback.
+
+### Concurrency & limits
+- `sessions: dict[sid, Session]`; destroyed on disconnect; `MAX_SESSIONS` (default 5) → friendly "practice room full".
+- Evaluation rate limit per session: 30/hour (cost guard).
+
+---
+
+## 3. File inventory
+
+### Source (SODA) → destination
+| SODA source | New app | Action |
+|---|---|---|
+| `index.html` | `index.html` | copy, retitle |
+| `vite.config.js`, `tailwind.config.js`, `postcss.config.mjs`, `.nvmrc` | same | copy as-is |
+| `package.json` | `package.json` | **rewrite** (no electron/wait-on/gsap/animejs/recharts) |
+| `public/*` | `public/` | copy as-is |
+| `src/main.jsx` | `src/main.jsx` | copy as-is |
+| `src/styles/*` | `src/styles/` | copy as-is |
+| `src/contexts/PanelSpaceContext.jsx` | same | copy as-is |
+| `src/services/SocketService.js` | same | copy (reads `VITE_BACKEND_URL`) |
+| `src/services/useBrowserMic.js` | same | copy as-is |
+| `src/hooks/useAudioPlayback.js` | same | copy as-is |
+| `src/components/HolographicOrb.jsx` | same | copy as-is |
+| `src/components/SlidePanel.jsx` | same | copy as-is |
+| `src/components/panels/IELTSSpeakingPanel.jsx` | same | copy + extend (transcript tab, final report) |
+| `src/components/panels/IELTSDashboardPanel.jsx` | same | copy as-is |
+| `src/App.jsx` | `src/App.jsx` | **rewrite** (IELTS shell only) |
+| `src/hooks/usePanelState.js` | same | **rewrite** (IELTS + orb state only) |
+| `src/hooks/useSocketHandlers.js` | `src/hooks/useIeltsSocketHandlers.js` | **rewrite** (add `transcription` listener) |
+| everything else under `src/` | — | **delete from copy** |
+
+### New backend files
+`backend/server.py`, `backend/voice.py`, `backend/examiner.py`, `backend/rubric.py`, `backend/evaluation.py`, `backend/question_bank.py`, `backend/ielts_tools.py`, `backend/prompts.py`, `backend/store.py`, `backend/logger.py`
+
+### New root files
+`requirements.txt`, `Dockerfile`, `render.yaml`, `netlify.toml`, `tests/run_all.py`, `tests/test_rubric.py`, `tests/test_examiner.py`, `tests/test_evaluation.py`, `tests/test_store.py`, `README.md`
+
+---
+
+## 4. Phase checklist
+
+- [x] **P0 Scaffold** — folder, copy UI, plan.md, git init, SODA .gitignore line
+- [x] **P1 Backend skeleton** — server.py, requirements, Dockerfile, compileall green
+- [x] **P2 Voice engine** — voice.py port written (round-trip verified in P6)
+- [x] **P3 Examiner + scoring** — rubric/bank/FSM/evaluation/tools/prompts + unit tests green
+- [x] **P4 Persistence** — store.py Supabase + fallback, progress in prompt, tests green
+- [ ] **P5 Frontend** — App rewrite, lean handlers, panels, prep countdown, build green
+- [ ] **P6 Verification** — build + compileall + all tests + local E2E smoke
+- [ ] **P7 Deploy** — repo, Render, Netlify, env vars, live smoke test
+
+---
+
+## 5. Change Log (append after EVERY change)
+
+- 2026-10-29 | `ielts-speaking-practice/` | created folder; copied `index.html`, `vite.config.js`, `tailwind.config.js`, `postcss.config.mjs`, `.nvmrc`, `public/` (4 files), `src/` (97 files) from SODA | P0 step 1 (copy UI, SODA untouched) | directory listing confirms 97 src files
+- 2026-10-29 | `ielts-speaking-practice/package.json` | new manifest: react/socket.io-client/lucide-react + vite/tailwind/concurrently; dropped electron, wait-on, gsap, animejs, recharts (only deleted components imported them) | only-IELTS app needs no desktop shell or dead deps | grep showed gsap/animejs only in WakeSequence/NightWinddown (deleted), recharts in MetricsPanel (deleted), lucide in no kept file
+- 2026-10-29 | `ielts-speaking-practice/.gitignore` | node_modules, dist, .env, backend/ielts_data, pycache, logs, .netlify | never commit secrets/deploy artifacts | n/a
+- 2026-10-29 | `ielts-speaking-practice/.env.example` | documented GEMINI_API_KEY, DEEPSEEK_API_KEY, PRONUNCIATION_MODEL, SUPABASE_DB_URL, MAX_SESSIONS, CORS_ORIGINS, PORT, VITE_BACKEND_URL | full env contract for Render + local dev | n/a
+- 2026-10-29 | `ielts-speaking-practice/plan.md` | created living plan: decisions, architecture, file inventory, phase checklist, change log, env, deploy, verification | user step 2 (log every small detail) | n/a
+- 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
+- 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
+- 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
+- 2026-10-29 | `ielts-speaking-practice/dist/` | `npm run build` baseline with untouched copied src | prove the copied UI is intact before trimming | ✓ built in 22.26s
+- 2026-10-29 | `backend/logger.py` | console logger (Render-aware level, module:line format) | shared logging for all backend modules | imported by every module successfully
+- 2026-10-29 | `backend/rubric.py` | official 0-9 descriptors × 4 criteria, `RUBRIC_PROMPT`, `round_half_up` (IELTS half-up), `overall_band`, `clamp_band` | single source of truth for scoring | 6 unit tests green
+- 2026-10-29 | `backend/question_bank.py` | 20 Part-1 topics × 3 Qs, 15 Part-2 cue cards (with Part-3 follow-ups) | exam content + repeatable sessions | exercised by examiner tests
+- 2026-10-29 | `backend/prompts.py` | examiner system prompt (verbatim-read protocol), text-eval prompt, pronunciation prompt, greeting | model behavior contract | imported by voice + evaluation
+- 2026-10-29 | `backend/ielts_tools.py` | exactly 7 Gemini function declarations (start_test, evaluate_answer, next_question, repeat_question, finish_test, set_goal, get_progress) | no non-IELTS tools exist | compile OK
+- 2026-10-29 | `backend/evaluation.py` | DeepSeek text eval ∥ Gemini WAV pronunciation eval, JSON extraction, heuristic fallbacks, merged band output | scoring with per-provider degradation | 9 offline tests green
+- 2026-10-29 | `backend/store.py` | Supabase DDL (`ielts_clients/sessions/answers`), lazy connect, JSONL fallback, progress/history | persistence without accounts | 7 tests green; fixed invalid `global ... as` line
+- 2026-10-29 | `backend/examiner.py` | test FSM (part1→2→3, cue-card prep), spoken-script builders (verbatim), report math (half-band), progress update | deterministic exam flow independent of LLM | 15 tests green
+- 2026-10-29 | `backend/voice.py` | slim AudioLoop port: per-session queues, echo-safe browser mic, answer PCM/text capture, 4s wall-clock silence, tool dispatch, Part-2 prep timer, eval rate limit, room-targeted emits | one isolated voice session per visitor | imported OK; unit tests green
+- 2026-10-29 | `backend/server.py` | FastAPI + Socket.IO (`app_socketio`), `/status` health, allowlisted events (connect/disconnect/start_audio/stop_audio/browser_audio/run_ielts_tool/ping), MAX_SESSIONS gate, CORS env | public multi-visitor backend | imports OK; `/status` route present
+- 2026-10-29 | `requirements.txt`, `Dockerfile`, `render.yaml`, `netlify.toml` | deploy config: python:3.11-slim + uvicorn, Render docker + `/status` health, Netlify build `dist` + SPA redirect | one-command deploys | compile + build green
+- 2026-10-29 | `tests/run_all.py`, `tests/test_rubric.py`, `tests/test_examiner.py`, `tests/test_evaluation.py`, `tests/test_store.py` | stdlib unittest suite, fully offline (mock store `_connect`, blank keys) | regression safety + Render CI parity | 37/37 pass in 0.05s
+
+---
+
+## 6. Environment variables
+
+| Var | Where | Required | Purpose |
+|---|---|---|---|
+| `GEMINI_API_KEY` | Render backend | yes | Gemini Live voice + pronunciation review |
+| `DEEPSEEK_API_KEY` | Render backend | yes* | text band evaluation (*heuristic fallback if missing) |
+| `SUPABASE_DB_URL` | Render backend | no | progress/history persistence (JSONL fallback) |
+| `PRONUNCIATION_MODEL` | Render backend | no | default `gemini-2.5-flash` |
+| `MAX_SESSIONS` | Render backend | no | default `5` |
+| `CORS_ORIGINS` | Render backend | no | Netlify site origin |
+| `PORT` | Render backend | no | default `8000` |
+| `VITE_BACKEND_URL` | Netlify build env | yes | UI → backend URL |
+
+---
+
+## 7. Deployment
+
+- **Backend**: Render web service from repo, Docker (`python:3.11-slim`), health check `/status`.
+- **Frontend**: Netlify site, build `npm run build`, publish `dist`, redirect `/* → /index.html`, build env `VITE_BACKEND_URL`.
+- **Git**: own repo (private) → `gh repo create`; SODA `.gitignore` gains `ielts-speaking-practice/`.
+- **Smoke**: open live URL → Start Practice → mic grant → 1 question → evaluation panel → final report.
+
+---
+
+## 8. Verification commands
+
+```bash
+cd ielts-speaking-practice
+npm run build                    # frontend
+py -3.11 -m compileall -q backend
+py -3.11 tests/run_all.py        # unit tests
+npm run dev                      # local E2E: backend :8000 + vite :5173
+```
+
+---
+
+## 9. Known limitations / follow-ups
+
+- Band scores are AI-estimated, not an official IELTS exam result (stated in UI footer).
+- Pronunciation review needs ≥2 s of clean audio; otherwise text-heuristic + "audio unavailable" note.
+- Render free tier sleeps when idle → first visit has a cold start (~30 s).
+- No user accounts: history tied to anonymous per-browser `client_id` (clearing site data resets progress).
+

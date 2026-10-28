@@ -1,0 +1,28 @@
+{
+  "name": "ielts-speaking-practice",
+  "version": "1.0.0",
+  "description": "IELTS SPEAKING PRACTICE - voice-first IELTS speaking examiner with official band scoring",
+  "scripts": {
+    "dev": "concurrently -k \"py -3.11 backend/server.py\" \"vite\"",
+    "dev:frontend": "vite",
+    "dev:backend": "py -3.11 backend/server.py",
+    "build": "vite build",
+    "test": "py -3.11 -m compileall -q backend && py -3.11 tests/run_all.py"
+  },
+  "keywords": ["ielts", "speaking", "voice", "gemini"],
+  "license": "ISC",
+  "dependencies": {
+    "lucide-react": "^0.300.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.0"
+  }
+}

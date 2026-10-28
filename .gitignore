@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+backend/ielts_data/
+__pycache__/
+*.pyc
+.ruff_cache/
+server.log
+server_err.log
+agent_*.log
+.netlify/
