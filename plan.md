@@ -87,7 +87,7 @@ Backend (Render, Docker python:3.11-slim)
 | `src/components/panels/IELTSDashboardPanel.jsx` | same | copy as-is |
 | `src/App.jsx` | `src/App.jsx` | **rewrite** (IELTS shell only) |
 | `src/hooks/usePanelState.js` | same | **rewrite** (IELTS + orb state only) |
-| `src/hooks/useSocketHandlers.js` | `src/hooks/useIeltsSocketHandlers.js` | **rewrite** (add `transcription` listener) |
+| `src/hooks/useSocketHandlers.js` | `src/hooks/useIeltsSession.js` | **rewrite** (IELTS state + socket events: audio_data, mic_level, speaking_state, transcription, test_state, answer_evaluated, report_ready, client_progress, panel_open, error) |
 | everything else under `src/` | — | **delete from copy** |
 
 ### New backend files
@@ -105,9 +105,9 @@ Backend (Render, Docker python:3.11-slim)
 - [x] **P2 Voice engine** — voice.py port written (round-trip verified in P6)
 - [x] **P3 Examiner + scoring** — rubric/bank/FSM/evaluation/tools/prompts + unit tests green
 - [x] **P4 Persistence** — store.py Supabase + fallback, progress in prompt, tests green
-- [ ] **P5 Frontend** — App rewrite, lean handlers, panels, prep countdown, build green
-- [ ] **P6 Verification** — build + compileall + all tests + local E2E smoke
-- [ ] **P7 Deploy** — repo, Render, Netlify, env vars, live smoke test
+- [x] **P5 Frontend** — App rewrite, lean session hook, panels (question/feedback/progress/report), prep countdown, build green
+- [x] **P6 Verification** — `npm run build` ✓, `compileall` OK, 37/37 tests OK, `/status` smoke OK (db=supabase)
+- [ ] **P7 Deploy** — repo pushed to GitHub; next: Render web service (Docker + 4 env vars), Netlify `VITE_BACKEND_URL`, live smoke test
 
 ---
 
@@ -118,6 +118,9 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-29 | `ielts-speaking-practice/.gitignore` | node_modules, dist, .env, backend/ielts_data, pycache, logs, .netlify | never commit secrets/deploy artifacts | n/a
 - 2026-10-29 | `ielts-speaking-practice/.env.example` | documented GEMINI_API_KEY, DEEPSEEK_API_KEY, PRONUNCIATION_MODEL, SUPABASE_DB_URL, MAX_SESSIONS, CORS_ORIGINS, PORT, VITE_BACKEND_URL | full env contract for Render + local dev | n/a
 - 2026-10-29 | `ielts-speaking-practice/plan.md` | created living plan: decisions, architecture, file inventory, phase checklist, change log, env, deploy, verification | user step 2 (log every small detail) | n/a
+- 2026-10-29 | `ielts-speaking-practice/src/App.jsx`, `src/hooks/useIeltsSession.js`, `src/components/panels/IELTS*Panel.jsx`, `index.html`, `public/manifest.json` | P5 frontend rewrite: trimmed to orb + transcript + Start/End/Dashboard; tabs Question/Feedback/Progress/Report; prep countdown; audio playback; VITE_BACKEND_URL socket; SODA title→IELTS SPEAKING PRACTICE | `npm run build` ✓ 16.8s, dist/ 242 KB JS
+- 2026-10-29 | `backend/voice.py` | `_test_state` gains `prep_ends_at` for cue cards + `prep_over`; added `_dashboard_data` wrapper (`progress`, `target_band`, `days_until_exam`) | frontend countdown + dashboard panel shape correct | `compileall -q backend` OK
+- 2026-10-29 | `ielts-speaking-practice/git` | `git add -A` → commit `5f4f54d` (46 files); `gh repo create ielts-speaking-practice --public --source=. --remote origin --push` → https://github.com/Abir7109/ielts-speaking-practice | code in GitHub, ready for Render + Netlify | remote tracked, push OK
 - 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
 - 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
 - 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
