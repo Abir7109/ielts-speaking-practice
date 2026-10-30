@@ -313,7 +313,9 @@ export default function IELTSSpeakingPanel({ data }) {
               ['Grammatical Range', band_scores.grammatical_range, 'grammatical_range'],
               ['Pronunciation', band_scores.pronunciation, 'pronunciation']
             ].map(([label, score, key]) => {
-              const color = score >= 7 ? 'var(--soda-success)' :
+              const assessed = typeof score === 'number'
+              const color = !assessed ? 'var(--soda-muted)' :
+                           score >= 7 ? 'var(--soda-success)' :
                            score >= 6 ? 'var(--soda-accent)' :
                            score >= 5 ? 'var(--soda-warning)' : 'var(--soda-error)'
               const fb = critFeedback[key] || {}
@@ -333,9 +335,12 @@ export default function IELTSSpeakingPanel({ data }) {
                     </span>
                     <span style={{
                       fontFamily: 'JetBrains Mono, monospace',
-                      fontSize: 18, fontWeight: 700, color
+                      fontSize: assessed ? 18 : 10,
+                      fontWeight: 700,
+                      letterSpacing: assessed ? 0 : '0.08em',
+                      color
                     }}>
-                      {score}
+                      {assessed ? score : 'NOT ASSESSED'}
                     </span>
                   </div>
                   {(fb.reason || fb.next_step) && (

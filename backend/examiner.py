@@ -14,6 +14,35 @@ import store
 
 _BAND_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 
+# Rotated by Examiner.spoken_feedback so three parts in a row do not sound copied.
+_CLOSE = [
+    "Right, that's {where} done. I'm placing it at band {band}.",
+    "Let's leave {where} there — band {band} on what I heard.",
+    "Okay. For {where} I'd say band {band}.",
+    "That's {where} wrapped up. Band {band}.",
+]
+
+_LIMIT = [
+    "What's holding it back is {label}: {reason}",
+    "The limit is {label} — {reason}",
+    "{label} is where the marks are being left. {reason}",
+    "The thing I noticed most was {label}: {reason}",
+]
+
+_FIX = [
+    "For the next one: {fix}",
+    "One change would lift it: {fix}",
+    "Here is the fix: {fix}",
+    "Try this: {fix}",
+]
+
+_REPORT_OPENERS = [
+    "That brings us to the end of the test — thank you for speaking with me.",
+    "And that is the test done. I appreciate the effort you put into that.",
+    "Well, that's the whole test behind us — nicely seen off.",
+    "That's everything marked. Thank you for sitting that with me.",
+]
+
 
 def band_words(value) -> str:
     """Speak band scores naturally: 5.5 -> 'five point five', 7.0 -> 'seven'."""
@@ -40,6 +69,28 @@ def _clip_sentence(text: str, max_words: int = 26) -> str:
     if len(words) > max_words:
         return " ".join(words[:max_words]).rstrip(",;:") + "..."
     return sentence
+
+
+def _numeric_scores(scores: dict) -> dict:
+    """Bands that were actually assessed — None means 'no evidence', never Band 0."""
+    return {
+        c: v for c, v in (scores or {}).items()
+        if isinstance(v, (int, float))
+    }
+
+
+def _pick_edge(scores: dict, worst: bool = True, seed: int = 0):
+    """Lowest (or highest) assessed criterion, rotating over ties.
+
+    Without the rotation a tie always resolves to Fluency, so every report named
+    the same criterion as the problem.
+    """
+    numeric = _numeric_scores(scores)
+    if not numeric:
+        return None
+    target = min(numeric.values()) if worst else max(numeric.values())
+    tied = [c for c, v in numeric.items() if v == target]
+    return tied[seed % len(tied)]
 
 
 class Examiner:
@@ -262,7 +313,12 @@ class Examiner:
         )
 
     def spoken_feedback(self, evaluation: dict) -> str:
-        """Part band + main limit + one fix, phrased for natural speech."""
+        """Part band + main limit + one fix, phrased for natural speech.
+
+        Phrasing rotates on (part, band, weakest criterion) so consecutive parts
+        do not come out word-for-word identical, while the same performance still
+        produces the same sentence for a given test run.
+        """
         part = evaluation.get("part")
         where = f"Part {part}" if part else "that part"
         degraded = evaluation.get("degraded") or []
@@ -272,28 +328,48 @@ class Examiner:
                 "service didn't respond. Your answers are saved, so let's keep going."
             )
 
-        band = band_words(evaluation.get("overall_band", 0))
         scores = evaluation.get("band_scores") or {}
         crit_fb = evaluation.get("criterion_feedback") or {}
-        speech = f"Okay, that's the end of {where}. I'd place it at band {band}."
+        band_value = evaluation.get("overall_band", 0) or 0
+        band = band_words(band_value)
 
-        if scores and crit_fb:
-            weakest = min(scores, key=lambda c: scores[c])
-            item = crit_fb.get(weakest) or {}
+        weakest = _pick_edge(scores, worst=True, seed=int(part or 1) + int(band_value * 2))
+        label = CRITERIA_LABELS.get(weakest, "one criterion") if weakest else ""
+        item = crit_fb.get(weakest) or {} if weakest else {}
+
+        seed = (
+            int(part or 1)
+            + int(band_value * 2)
+            + (CRITERIA.index(weakest) if weakest in CRITERIA else 0)
+        )
+        speech = _CLOSE[seed % len(_CLOSE)].format(where=where, band=band)
+
+        if item:
             reason = _clip_sentence(item.get("reason") or "")
-            label = CRITERIA_LABELS.get(weakest, "one criterion")
             if reason:
-                speech += f" The main thing holding it back is {label.lower()}: {reason}"
-            next_step = _clip_sentence(item.get("next_step") or "", 20)
-            if next_step:
-                speech += f" Next time, {next_step}"
-
-        if not crit_fb:
+                speech += " " + _LIMIT[seed % len(_LIMIT)].format(label=label.lower(), reason=reason)
+            fix = _clip_sentence(item.get("next_step") or "", 22)
+            if fix:
+                speech += " " + _FIX[(seed + 1) % len(_FIX)].format(fix=fix)
+        elif not crit_fb:
             imps = evaluation.get("improvements") or []
             if imps and isinstance(imps[0], dict):
                 issue = _clip_sentence(imps[0].get("issue") or "", 20)
                 if issue:
                     speech += f" The main thing to improve: {issue}"
+
+        strongest = _pick_edge(scores, worst=False, seed=int(part or 1))
+        if strongest and strongest != weakest and seed % 2 == 0:
+            speech += (
+                f" Your {CRITERIA_LABELS.get(strongest, '').lower()} was the stronger "
+                "side of that."
+            )
+
+        if "pronunciation-unassessed" in degraded:
+            speech += (
+                " I couldn't hear your pronunciation clearly enough to score it, so it "
+                "is not in that band."
+            )
         return speech
 
     def spoken_repeat(self) -> str:
@@ -340,21 +416,32 @@ class Examiner:
 
         crit_scores = {}
         for crit in CRITERIA:
-            vals = [
-                float(ev.get("band_scores", {}).get(crit, 0) or 0)
-                for ev in evals
-            ]
-            crit_scores[crit] = round_half_up(sum(vals) / len(vals)) if vals else 0.0
+            vals = []
+            for ev in evals:
+                v = (ev.get("band_scores") or {}).get(crit)
+                if isinstance(v, (int, float)):
+                    vals.append(float(v))
+            # None = never assessed; averaging a missing pronunciation in as Band 0
+            # made every report claim pronunciation was the candidate's weakest area.
+            crit_scores[crit] = round_half_up(sum(vals) / len(vals)) if vals else None
 
         corrections = []
         strengths = []
         tips = []
+        question_notes = []
         est_reasons: dict[str, list[str]] = {c: [] for c in CRITERIA}
+        est_blockers: dict[str, str] = {c: "" for c in CRITERIA}
         est_next: dict[str, str] = {c: "" for c in CRITERIA}
         scoring_modes = set()
         for ev in evals:
             corrections.extend(ev.get("grammar_errors") or [])
             strengths.extend(ev.get("strengths") or [])
+            for note in ev.get("question_notes") or []:
+                if isinstance(note, dict) and str(note.get("note") or "").strip():
+                    question_notes.append(
+                        {"part": ev.get("part"), "index": note.get("index"),
+                         "note": str(note["note"]).strip()}
+                    )
             if ev.get("band7_tip"):
                 tips.append(ev["band7_tip"])
             if ev.get("evaluator"):
@@ -365,15 +452,18 @@ class Examiner:
                 reason = str(item.get("reason") or "").strip()
                 if reason and reason not in est_reasons[crit]:
                     est_reasons[crit].append(reason)
+                if not est_blockers[crit] and item.get("why_not_higher"):
+                    est_blockers[crit] = str(item["why_not_higher"]).strip()
                 if not est_next[crit] and item.get("next_step"):
                     est_next[crit] = str(item["next_step"]).strip()
 
-        weakest = min(crit_scores, key=lambda c: crit_scores[c]) if evals else None
-        strongest = max(crit_scores, key=lambda c: crit_scores[c]) if evals else None
+        weakest = _pick_edge(crit_scores, worst=True, seed=len(evals)) if evals else None
+        strongest = _pick_edge(crit_scores, worst=False, seed=len(evals)) if evals else None
 
         criterion_feedback = {
             crit: {
                 "reasons": est_reasons[crit][:2],
+                "why_not_higher": est_blockers[crit],
                 "next_step": est_next[crit],
             }
             for crit in CRITERIA
@@ -387,7 +477,9 @@ class Examiner:
             "overall_band": overall,
             "part_scores": part_scores,
             "band_scores": crit_scores,
+            "pronunciation_assessed": crit_scores.get("pronunciation") is not None,
             "answer_count": len(self.answers),
+            "question_notes": question_notes[:12],
             "corrections": corrections[:20],
             "strengths": strengths[:8],
             "top_tips": tips[:5],
@@ -405,24 +497,52 @@ class Examiner:
         return report
 
     def spoken_report(self, report: dict) -> str:
-        scores = report.get("band_scores", {})
-        parts = report.get("part_scores", {})
+        scores = report.get("band_scores") or {}
+        parts = report.get("part_scores") or {}
+        overall = report.get("overall_band", 0) or 0
         part_txt = ", ".join(
             f"Part {k}: {band_words(v)}" for k, v in sorted(parts.items())
         )
-        return (
-            f"That brings us to the end of the test — thank you for speaking with me. "
-            f"Your estimated overall band is {band_words(report.get('overall_band', 0))}. "
-            f"Fluency {band_words(scores.get('fluency_coherence', 0))}, "
-            f"Vocabulary {band_words(scores.get('lexical_resource', 0))}, "
-            f"Grammar {band_words(scores.get('grammatical_range', 0))}, "
-            f"Pronunciation {band_words(scores.get('pronunciation', 0))}. "
-            f"{part_txt}. "
-            f"Your strongest area is {report.get('strongest_criterion', '—')}; "
-            f"the one to work on next is {report.get('weakest_criterion', 'your weakest area')}. "
-            "You'll find the full report with every correction on your screen. "
+        breakdown, unassessed = [], []
+        for label, key in (
+            ("Fluency", "fluency_coherence"),
+            ("Vocabulary", "lexical_resource"),
+            ("Grammar", "grammatical_range"),
+            ("Pronunciation", "pronunciation"),
+        ):
+            value = scores.get(key)
+            if isinstance(value, (int, float)):
+                breakdown.append(f"{label} {band_words(value)}")
+            else:
+                unassessed.append(label)
+
+        opener = _REPORT_OPENERS[int(overall * 2) % len(_REPORT_OPENERS)]
+        speech = f"{opener} Your estimated overall band is {band_words(overall)}."
+        if breakdown:
+            joined = ", ".join(breakdown)
+            speech += f" {joined}."
+        if unassessed:
+            speech += (
+                f" I could not assess {', '.join(unassessed)} from what I recorded."
+            )
+        if part_txt:
+            speech += f" {part_txt}."
+
+        strongest = report.get("strongest_criterion") or ""
+        weakest = report.get("weakest_criterion") or ""
+        if strongest and weakest and strongest != weakest:
+            speech += (
+                f" {strongest} carried this test; {weakest} is where the next band is "
+                "waiting."
+            )
+        elif weakest:
+            speech += f" The area to work on next is {weakest}."
+
+        speech += (
+            " Every correction is written out in the report on your screen. "
             "Well done for finishing — practising like this really does help."
         )
+        return speech
 
     # ── persistence ─────────────────────────────────────────────
 
@@ -481,8 +601,13 @@ class Examiner:
                     streak = 1
 
             target = float(client.get("target_band") or 7.0)
+            scores = report.get("band_scores") or {}
             gaps = sorted(
-                ((c, target - float(report["band_scores"].get(c, 0) or 0)) for c in CRITERIA),
+                (
+                    (c, target - float(scores[c]))
+                    for c in CRITERIA
+                    if isinstance(scores.get(c), (int, float))
+                ),
                 key=lambda x: x[1],
                 reverse=True,
             )

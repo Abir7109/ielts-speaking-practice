@@ -1,5 +1,4 @@
 """Prompts for the IELTS examiner: system instruction + evaluation prompts."""
-import os
 from datetime import datetime
 
 from rubric import RUBRIC_PROMPT
@@ -81,71 +80,115 @@ EVALUATION RUBRIC (for context only — scoring is done by the system)
 Always be specific about what exact change would move them up one band. Examiner-level feedback, never vague encouragement."""
 
 
-def build_text_evaluation_prompt(answer: str, part: int, question: str) -> str:
-    return f"""You are a certified IELTS Speaking examiner with 10+ years of experience scoring for the British Council. Score this IELTS Speaking Part {part} response using the OFFICIAL four-criteria system (each criterion weighted 25%).
+def _criterion_lenses() -> str:
+    return """EACH CRITERION IS JUDGED ON ITS OWN EVIDENCE TYPE — never let one bleed into another.
+- Fluency & Coherence: the shape of the speech. Turn length, hesitation, fillers,
+  self-correction, restarts, linking, and whether each answer is developed
+  (direct response + reason + example). Say nothing about word choice or grammar.
+- Lexical Resource: the words themselves. Range, precision, collocation, less common
+  or idiomatic items, repetition of a basic word, paraphrase. Say nothing about pace,
+  hesitation, or grammar accuracy.
+- Grammatical Range & Accuracy: the structures. Simple vs complex sentences, subordinate
+  clauses, tense and modal variety, and the density of grammar errors. Say nothing about
+  vocabulary quality or fluency.
 
-OFFICIAL BAND DESCRIPTORS
-{RUBRIC_PROMPT}
+STRICT UNIQUENESS RULE
+- Every "evidence" quote must be a DIFFERENT span of the transcript. Never reuse one
+  quote for two criteria.
+- Never reuse a reason sentence, or its shape, across criteria. If you catch yourself
+  writing a variant of "limited development" more than once, you have stopped analysing.
+- Real candidates rarely sit level across all criteria. Equal bands must be a coincidence
+  you can justify three separate times, not one overall impression copied three times.
+- For each criterion give the band, then why it is not the half-band above, then why it
+  is not the half-band below, anchored to the descriptor wording quoted above."""
 
-QUESTION: {question}
-CANDIDATE RESPONSE (speech-to-text transcript; may contain transcription errors):
-{answer}
 
-HOW TO SCORE
-- Judge the answer against the descriptor wording. Choose the band whose descriptor the answer matches best, then decide if the next half-band up is earned.
-- Use the full 0-9 scale and half bands (5.5, 6.5, ...). Do NOT default to Band 5.5 or Band 6: a very limited answer is 3-4, an adequate answer is 5-6, a strong developed answer is 7-8.
-- Be strict but fair: do not inflate, do not punish STT noise, accent, or content opinions.
-- Fluency: use pauses, fillers, repetition, self-correction, and coherence/development visible in the transcript.
-- Lexical: range, precision, less common/idiomatic items, collocation, paraphrase. Repetition of basic words is evidence.
-- Grammar: range of structures (simple vs complex) and density of errors. Only list errors that are clearly the candidate's, not STT artefacts.
-- Pronunciation here is a text-only estimate; audio review will override it.
-- Every reason and next_step must reference something concrete in THIS answer, not generic advice.
+def _evidence_block(evidence: str) -> str:
+    if not evidence:
+        return ""
+    return (
+        "MEASURED SIGNALS (computed from the transcript — cite these, do not re-derive "
+        "them)\n" + evidence + "\n\n"
+    )
 
+
+def _verdict_schema(question_notes_instruction: str) -> str:
+    return f"""
 Respond with THIS JSON object only (valid, compact JSON; no markdown, no extra text; do not add keys):
 {{
   "band_scores": {{
     "fluency_coherence": <0-9, one decimal max>,
     "lexical_resource": <0-9>,
-    "grammatical_range": <0-9>,
-    "pronunciation": <0-9, text-only estimate>
+    "grammatical_range": <0-9>
   }},
   "criterion_feedback": {{
     "fluency_coherence": {{
-      "reason": "why this band and NOT the next half-band up, citing the descriptor and this answer",
-      "evidence": "exact short quote from the answer showing the limiting feature",
-      "next_step": "one concrete change that would raise this criterion"
+      "reason": "why this band, citing the FC descriptor and this criterion's evidence only",
+      "why_not_higher": "the one feature blocking the next half-band",
+      "why_not_lower": "the feature that earns this band rather than the one below",
+      "evidence": "exact quote used only by this criterion",
+      "next_step": "one concrete change that raises this criterion"
     }},
-    "lexical_resource": {{"reason": "...", "evidence": "...", "next_step": "..."}},
-    "grammatical_range": {{"reason": "...", "evidence": "...", "next_step": "..."}},
-    "pronunciation": {{"reason": "...", "evidence": "...", "next_step": "..."}}
+    "lexical_resource": {{"reason": "...", "why_not_higher": "...", "why_not_lower": "...", "evidence": "...", "next_step": "..."}},
+    "grammatical_range": {{"reason": "...", "why_not_higher": "...", "why_not_lower": "...", "evidence": "...", "next_step": "..."}}
   }},
-  "why_band_summary": "2-3 sentences: what holds the score at this band and the exact changes that would raise it one band",
+  "question_notes": [
+    {{"index": <question number>, "note": "{question_notes_instruction}"}}
+  ],
+  "why_band_summary": "2-3 sentences naming the one criterion that caps the score and the exact change that lifts it",
   "strengths": ["specific strength with evidence, max 3"],
   "improvements": [
     {{
       "issue": "specific problem",
-      "example_from_response": "exact quote from the answer",
+      "criterion": "fluency_coherence | lexical_resource | grammatical_range",
+      "example_from_response": "exact quote",
       "better_version": "improved version of that exact sentence",
       "band_impact": "which criterion and band this change affects"
     }}
   ],
   "vocabulary_feedback": {{
     "repetitions_found": ["over-used word", "..."],
-    "suggested_upgrades": [{{"used": "basic word", "better": "more precise option", "best": "band 8-9 option"}}]
+    "suggested_upgrades": [{{"used": "a word they actually said", "better": "more precise option", "best": "band 8-9 option"}}]
   }},
   "grammar_errors": [
     {{"error": "exact quote", "correction": "corrected version", "type": "tense/article/preposition/agreement/word-formation/etc"}}
   ],
-  "corrected_transcript": "FULL response with spelling, grammar and word-choice fixed, meaning preserved",
+  "corrected_transcript": "FULL transcript with spelling, grammar and word-choice fixed, meaning preserved",
   "band7_tip": "single most impactful change to reach the next band",
   "filler_words_count": <number>,
   "word_count": <number>
 }}
 
-LIMITS: max 3 strengths, max 3 improvements, max 8 grammar_errors, max 3 vocabulary upgrades. Quote exactly. JSON only."""
+LIMITS: max 3 strengths, max 3 improvements, max 8 grammar_errors, max 3 vocabulary upgrades. Every "evidence"/"example_from_response" must be a distinct quote. JSON only.
+
+DO NOT output a "pronunciation" score — pronunciation is assessed separately from the recording."""
 
 
-def build_part_evaluation_prompt(answers: list[tuple[str, str]], part: int) -> str:
+def build_text_evaluation_prompt(
+    answer: str, part: int, question: str, evidence: str = ""
+) -> str:
+    return f"""You are a certified IELTS Speaking examiner with 10+ years of experience scoring for the British Council. Score this IELTS Speaking Part {part} response on the three official criteria that a transcript can evidence (each of the four official criteria is weighted 25%; you are scoring three here).
+
+OFFICIAL BAND DESCRIPTORS
+{RUBRIC_PROMPT}
+
+QUESTION: {question}
+CANDIDATE RESPONSE (verbatim speech-to-text; may contain transcription errors):
+{answer}
+
+{_evidence_block(evidence)}{_criterion_lenses()}
+
+HOW TO SCORE
+- Use the full 0-9 scale and half bands (5.5, 6.5, ...). Do NOT default to Band 5.5 or Band 6: a very limited answer is 3-4, an adequate answer is 5-6, a strong developed answer is 7-8.
+- Do not inflate, and do not punish STT noise, accent, or your opinion of their ideas.
+- Only list grammar errors clearly made by the candidate, not STT artefacts.
+- Every reason and next_step must reference something concrete in THIS answer, not generic advice.
+{_verdict_schema("one specific thing about THIS answer")}"""
+
+
+def build_part_evaluation_prompt(
+    answers: list[tuple[str, str]], part: int, evidence: str = ""
+) -> str:
     turns = "\n\n".join(
         f"Q{i + 1}: {q or '(question not captured)'}\nA{i + 1}: {a}"
         for i, (q, a) in enumerate(answers)
@@ -155,69 +198,26 @@ def build_part_evaluation_prompt(answers: list[tuple[str, str]], part: int) -> s
         2: "Part 2 is a 1-2 minute long turn; judge the whole turn, especially development and coherence.",
         3: "Part 3 is an abstract discussion; judge the set of answers together, especially range and precision.",
     }.get(part, "Judge the whole part as one performance.")
-    return f"""You are a certified IELTS Speaking examiner with 10+ years of experience scoring for the British Council. Score this candidate's WHOLE IELTS Speaking Part {part} performance using the OFFICIAL four-criteria system (each criterion weighted 25%).
+    return f"""You are a certified IELTS Speaking examiner with 10+ years of experience scoring for the British Council. Score this candidate's WHOLE IELTS Speaking Part {part} performance on the three official criteria that a transcript can evidence (each of the four official criteria is weighted 25%; you are scoring three here).
 
 {part_focus}
 
 OFFICIAL BAND DESCRIPTORS
 {RUBRIC_PROMPT}
 
-CANDIDATE RESPONSES (speech-to-text transcripts; may contain transcription errors):
+CANDIDATE RESPONSES (verbatim speech-to-text; may contain transcription errors):
 {turns}
 
+{_evidence_block(evidence)}{_criterion_lenses()}
+
 HOW TO SCORE
-- Score the part as ONE performance. Use the best evidence across all answers; do not average individual answers and do not let one weak answer cap the part.
-- Judge against the descriptor wording. Choose the band whose descriptor the whole part matches best, then decide if the next half-band up is earned.
+- Score the part as ONE performance, but judge each criterion on its own evidence. Use the best evidence across all answers; do not average individual answers and do not let one weak answer cap the part.
 - Use the full 0-9 scale and half bands (5.5, 6.5, ...). Do NOT default to Band 5.5 or Band 6 just because the answers are short or the topic is simple. A very limited performance is 3-4, an adequate one is 5-6, a strong developed one is 7-8.
-- Be strict but fair: do not inflate, do not punish STT noise, accent, or content opinions.
-- Fluency: pauses, fillers, repetition, self-correction, coherence and development across the part.
-- Lexical: range, precision, less common/idiomatic items, collocation, paraphrase. Repetition of basic words is evidence.
-- Grammar: range of structures (simple vs complex) and density of errors. Only list errors clearly made by the candidate, not STT artefacts.
-- Pronunciation here is a text-only estimate; audio review will override it.
+- Do not inflate, and do not punish STT noise, accent, or your opinion of their ideas.
+- Only list errors clearly made by the candidate, not STT artefacts.
 - Every reason, evidence quote and next_step must reference something concrete in THESE answers.
-
-Respond with THIS JSON object only (valid, compact JSON; no markdown, no extra text; do not add keys):
-{{
-  "band_scores": {{
-    "fluency_coherence": <0-9, one decimal max>,
-    "lexical_resource": <0-9>,
-    "grammatical_range": <0-9>,
-    "pronunciation": <0-9, text-only estimate>
-  }},
-  "criterion_feedback": {{
-    "fluency_coherence": {{
-      "reason": "why this band and NOT the next half-band up, citing the descriptor and the whole part",
-      "evidence": "exact short quote from the answers showing the limiting feature",
-      "next_step": "one concrete change that would raise this criterion"
-    }},
-    "lexical_resource": {{"reason": "...", "evidence": "...", "next_step": "..."}},
-    "grammatical_range": {{"reason": "...", "evidence": "...", "next_step": "..."}},
-    "pronunciation": {{"reason": "...", "evidence": "...", "next_step": "..."}}
-  }},
-  "why_band_summary": "2-3 sentences: what holds the part at this band and the exact changes that would raise it one band",
-  "strengths": ["specific strength with evidence, max 3"],
-  "improvements": [
-    {{
-      "issue": "specific problem",
-      "example_from_response": "exact quote from the answers",
-      "better_version": "improved version of that exact sentence",
-      "band_impact": "which criterion and band this change affects"
-    }}
-  ],
-  "vocabulary_feedback": {{
-    "repetitions_found": ["over-used word", "..."],
-    "suggested_upgrades": [{{"used": "basic word", "better": "more precise option", "best": "band 8-9 option"}}]
-  }},
-  "grammar_errors": [
-    {{"error": "exact quote", "correction": "corrected version", "type": "tense/article/preposition/agreement/word-formation/etc"}}
-  ],
-  "corrected_transcript": "FULL part transcript with spelling, grammar and word-choice fixed, meaning preserved",
-  "band7_tip": "single most impactful change to reach the next band",
-  "filler_words_count": <number>,
-  "word_count": <number>
-}}
-
-LIMITS: max 3 strengths, max 3 improvements, max 8 grammar_errors, max 3 vocabulary upgrades. Quote exactly. JSON only."""
+- Fill "question_notes" with one entry per question, each saying something true only of that answer — this is where the candidate's weakest and strongest turns show up.
+{_verdict_schema("one observation true only of THIS answer")}"""
 
 
 def build_pronunciation_prompt(transcript: str, part: int) -> str:
@@ -238,6 +238,8 @@ Official IELTS Pronunciation descriptors:
 
 Listen for: intelligibility (can every word be understood?), word stress, sentence stress, connected speech, intonation/rhythm, individual sound accuracy, and first-language influence. Ignore microphone quality and background noise.
 
+Quote only what you actually HEAR in the recording, never something inferred from the transcript above.
+
 Respond with JSON only:
 {{
   "pronunciation_band": <0-9, one decimal max>,
@@ -246,4 +248,3 @@ Respond with JSON only:
   "issues": [{{"sound_or_feature": "...", "example": "word or phrase as heard", "fix": "practical correction"}}],
   "notes": "2-3 sentence assessment: what limits the band and what would raise it one band"
 }}"""
-

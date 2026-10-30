@@ -40,8 +40,22 @@ class TestRounding(unittest.TestCase):
         }
         self.assertEqual(rubric.overall_band(scores), 6.5)
 
-    def test_overall_band_ignores_missing(self):
-        self.assertEqual(rubric.overall_band({"fluency_coherence": 8.0}), 2.0)
+    def test_overall_band_excludes_unassessed(self):
+        # A criterion scored None was not assessed (e.g. pronunciation with no usable
+        # recording). Counting it as Band 0 would drag every candidate to the floor.
+        self.assertEqual(rubric.overall_band({"fluency_coherence": 8.0}), 8.0)
+        self.assertEqual(
+            rubric.overall_band(
+                {
+                    "fluency_coherence": 6.0,
+                    "lexical_resource": 6.0,
+                    "grammatical_range": 6.0,
+                    "pronunciation": None,
+                }
+            ),
+            6.0,
+        )
+        self.assertEqual(rubric.overall_band({"pronunciation": None}), 0.0)
 
 
 class TestClamp(unittest.TestCase):

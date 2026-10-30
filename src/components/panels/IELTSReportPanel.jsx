@@ -115,11 +115,11 @@ export default function IELTSReportPanel({ report, onRestart }) {
               </span>
               <span style={{
                 fontFamily: 'JetBrains Mono, monospace',
-                fontSize: 16,
+                fontSize: crit[key] == null ? 11 : 16,
                 fontWeight: 700,
-                color: bandColor(crit[key] || 0),
+                color: crit[key] == null ? 'var(--soda-muted)' : bandColor(crit[key]),
               }}>
-                {Number(crit[key] || 0).toFixed(1)}
+                {crit[key] == null ? 'NOT ASSESSED' : Number(crit[key]).toFixed(1)}
               </span>
             </div>
             {(fb.reasons?.length > 0 || fb.next_step) && (
@@ -140,6 +140,17 @@ export default function IELTSReportPanel({ report, onRestart }) {
                     {r}
                   </div>
                 ))}
+                {fb.why_not_higher && (
+                  <div style={{
+                    fontFamily: 'Space Grotesk, sans-serif',
+                    fontSize: 11,
+                    color: 'var(--soda-warning)',
+                    lineHeight: 1.5,
+                    marginTop: 3,
+                  }}>
+                    BLOCKING THE NEXT HALF-BAND: {fb.why_not_higher}
+                  </div>
+                )}
                 {fb.next_step && (
                   <div style={{
                     fontFamily: 'Space Grotesk, sans-serif',
@@ -190,6 +201,28 @@ export default function IELTSReportPanel({ report, onRestart }) {
           {report.weakest_criterion && (
             <> / Focus next: <span style={{ color: 'var(--soda-warning)' }}>{report.weakest_criterion}</span></>
           )}
+        </div>
+      )}
+
+      {(report.question_notes || []).length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ ...label(), marginBottom: 6 }}>Examiner notes, question by question</div>
+          {(report.question_notes || []).map((n, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              gap: 8,
+              marginBottom: 5,
+              fontFamily: 'Space Grotesk, sans-serif',
+              fontSize: 11,
+              color: 'var(--soda-muted)',
+              lineHeight: 1.5,
+            }}>
+              <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--soda-accent)' }}>
+                P{n.part} Q{n.index}
+              </span>
+              <span style={{ color: 'var(--soda-text)' }}>{n.note}</span>
+            </div>
+          ))}
         </div>
       )}
 

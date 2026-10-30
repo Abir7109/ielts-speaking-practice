@@ -58,6 +58,11 @@ DESCRIPTORS = {
 
 CRITERIA = ["fluency_coherence", "lexical_resource", "grammatical_range", "pronunciation"]
 
+# Pronunciation is only ever scored from the recording; the text evaluator has no
+# evidence for it and reproduces the fluency reasoning when asked to guess.
+TEXT_CRITERIA = [c for c in CRITERIA if c != "pronunciation"]
+AUDIO_CRITERIA = ["pronunciation"]
+
 CRITERION_WEIGHT = 0.25  # each criterion contributes 25% of the overall band
 
 CRITERIA_LABELS = {
@@ -82,9 +87,24 @@ def round_half_up(value: float, increment: float = 0.5) -> float:
     return round(steps * increment, 1)
 
 
+def assessed_criteria(scores: dict) -> list:
+    """Criteria that carry a real band; None means 'not assessed', never 0."""
+    return [
+        c for c in CRITERIA
+        if isinstance(scores.get(c), (int, float)) and scores.get(c) is not None
+    ]
+
+
 def overall_band(scores: dict) -> float:
-    """Mean of the four criteria, rounded to the nearest half band."""
-    vals = [float(scores.get(c, 0) or 0) for c in CRITERIA]
+    """Mean of the assessed criteria, rounded to the nearest half band.
+
+    A criterion scored None (pronunciation without usable audio) is excluded
+    rather than counted as Band 0 — averaging in a fake zero drags every
+    candidate toward the same floor band.
+    """
+    vals = [float(scores[c]) for c in assessed_criteria(scores)]
+    if not vals:
+        return 0.0
     return round_half_up(sum(vals) / len(vals))
 
 

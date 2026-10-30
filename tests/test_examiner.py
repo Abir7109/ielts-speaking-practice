@@ -212,24 +212,51 @@ class TestSpokenNumbers(unittest.TestCase):
                       "grammatical_range", "pronunciation")
         }
         spoken = ex.spoken_feedback(ev)
-        self.assertTrue(
-            spoken.startswith(
-                "Okay, that's the end of Part 1. I'd place it at band five point five."
-            )
-        )
+        self.assertIn("part 1", spoken.lower())
+        self.assertIn("five point five", spoken)
         self.assertIn("lexical resource", spoken.lower())
         self.assertNotIn("Top fix:", spoken)
+        self.assertNotIn("5.5", spoken)
         self.assertLess(len(spoken.split()), 60)
 
     def test_spoken_part_feedback_names_the_part(self):
         ex = Examiner("")
         ev = _fake_eval(6.0, part=2)
         spoken = ex.spoken_feedback(ev)
-        self.assertTrue(
-            spoken.startswith(
-                "Okay, that's the end of Part 2. I'd place it at band six."
-            )
-        )
+        self.assertIn("part 2", spoken.lower())
+        self.assertIn("six", spoken)
+
+    def test_consecutive_parts_are_not_word_for_word(self):
+        # The old template recited the identical sentence after every part.
+        ex = Examiner("")
+        spoken = set()
+        for part, band in ((1, 5.5), (2, 6.0), (3, 6.5)):
+            ev = _fake_eval(band, part=part)
+            ev["criterion_feedback"] = {
+                c: {
+                    "reason": f"{c} is the limiting factor here.",
+                    "evidence": "some quote",
+                    "next_step": f"improve {c}",
+                }
+                for c in ("fluency_coherence", "lexical_resource",
+                          "grammatical_range", "pronunciation")
+            }
+            spoken.add(ex.spoken_feedback(ev))
+        self.assertEqual(len(spoken), 3, "part feedback repeated itself verbatim")
+
+    def test_unassessed_pronunciation_is_admitted_not_recited_as_zero(self):
+        ex = Examiner("")
+        ev = _fake_eval(6.0, part=1)
+        ev["band_scores"]["pronunciation"] = None
+        ev["degraded"] = ["pronunciation-unassessed"]
+        ev["criterion_feedback"] = {
+            c: {"reason": f"{c} limit", "evidence": "q", "next_step": f"fix {c}"}
+            for c in ("fluency_coherence", "lexical_resource",
+                      "grammatical_range", "pronunciation")
+        }
+        spoken = ex.spoken_feedback(ev)
+        self.assertIn("pronunciation", spoken.lower())
+        self.assertNotIn("zero", spoken.lower())
 
     def test_degraded_feedback_does_not_invent_a_band(self):
         ex = Examiner("")
