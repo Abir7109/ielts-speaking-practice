@@ -141,6 +141,7 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-30 | `backend/examiner.py` | `band_words()` natural number speech; concise 2-3 sentence spoken_feedback (no "Top fix" label, clipped first sentence); warmer spoken_report | user heard "5 5", "7 0" and essay-length robotic feedback | 46 tests OK
 - 2026-10-30 | `backend/voice.py` | fixed missing-space concatenation between feedback and next question/report; natural get_progress/set_goal wording with band words; merge last report into progress when average missing | user heard "life?That concludes" and stale "not yet scored" | tests OK
 - 2026-10-30 | `backend/prompts.py` | warm human examiner persona, natural contractions/bridges, spoken numbers, brevity, encourage silent candidates | user: "not acting like a real examiner / friend" | manual review
+- 2026-10-30 | deploy verification | commit `59e599f` pushed → Render redeployed; `/status` `eval:"gemini"`; live smoke: greeting 63 audio chunks + full transcript | confirm natural delivery on production | `smoke_live.js` EXIT=0
 - 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
 - 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
 - 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
