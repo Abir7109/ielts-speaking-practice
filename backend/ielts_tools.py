@@ -3,6 +3,8 @@
 ONLY these tools exist in this app. Nothing else is callable.
 """
 
+from google.genai import types
+
 IELTS_TOOLS = [
     {
         "name": "start_test",
@@ -108,3 +110,14 @@ IELTS_TOOLS = [
 ]
 
 IELTS_TOOL_NAMES = [t["name"] for t in IELTS_TOOLS]
+
+
+def build_tools() -> list[types.Tool]:
+    """Wrap raw declarations in the types google-genai Live requires."""
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(**decl) for decl in IELTS_TOOLS
+            ]
+        )
+    ]

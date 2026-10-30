@@ -25,7 +25,7 @@ from google.genai import types
 import evaluation as eval_mod
 import store
 from examiner import Examiner
-from ielts_tools import IELTS_TOOLS
+from ielts_tools import build_tools
 from logger import log
 from prompts import GREETING_START_MESSAGE, build_examiner_prompt
 
@@ -236,26 +236,32 @@ class VoiceSession:
                 log.warning(f"[RUN] progress load failed: {e}")
         system_prompt = build_examiner_prompt(progress)
 
-        config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            output_audio_transcription={},
-            input_audio_transcription={},
-            realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=300,
-                    silence_duration_ms=800,
-                )
-            ),
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
-                )
-            ),
-            system_instruction=system_prompt,
-            tools=IELTS_TOOLS,
-        )
+        try:
+            config = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                output_audio_transcription={},
+                input_audio_transcription={},
+                realtime_input_config=types.RealtimeInputConfig(
+                    automatic_activity_detection=types.AutomaticActivityDetection(
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                        prefix_padding_ms=300,
+                        silence_duration_ms=800,
+                    )
+                ),
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
+                    )
+                ),
+                system_instruction=system_prompt,
+                tools=build_tools(),
+            )
+        except Exception as e:
+            log.error(f"[RUN] invalid Live config: {e}")
+            await self._emit("error", {"message": f"Voice config error: {e}"})
+            await self._emit("connection_state", {"connected": False, "reason": "config_error"})
+            return
 
         retry_delay = 1
         is_reconnect = False
