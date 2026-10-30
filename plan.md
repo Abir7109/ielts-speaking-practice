@@ -142,6 +142,8 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-30 | `backend/voice.py` | fixed missing-space concatenation between feedback and next question/report; natural get_progress/set_goal wording with band words; merge last report into progress when average missing | user heard "life?That concludes" and stale "not yet scored" | tests OK
 - 2026-10-30 | `backend/prompts.py` | warm human examiner persona, natural contractions/bridges, spoken numbers, brevity, encourage silent candidates | user: "not acting like a real examiner / friend" | manual review
 - 2026-10-30 | deploy verification | commit `59e599f` pushed → Render redeployed; `/status` `eval:"gemini"`; live smoke: greeting 63 audio chunks + full transcript | confirm natural delivery on production | `smoke_live.js` EXIT=0
+- 2026-10-30 | `backend/server.py` | CORS now always allows all origins (`CORS_ORIGINS` informational only; logged when set) for both FastAPI and Socket.IO | new frontend URL `https://soda-ielts.netlify.app` was blocked ("No Access-Control-Allow-Origin") because Render allowlist still had the old domain | pending live header check
+- 2026-10-30 | `.env.example` | `CORS_ORIGINS=*` documented as informational; allow-all by design | prevent future site-rename breakage | n/a
 - 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
 - 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
 - 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
@@ -172,7 +174,7 @@ Backend (Render, Docker python:3.11-slim)
 | `SUPABASE_DB_URL` | Render backend | no | progress/history persistence (JSONL fallback) |
 | `PRONUNCIATION_MODEL` | Render backend | no | default `gemini-2.5-flash` |
 | `MAX_SESSIONS` | Render backend | no | default `5` |
-| `CORS_ORIGINS` | Render backend | no | Netlify site origin |
+| `CORS_ORIGINS` | Render backend | no | Allow-all by design (`*`); safe for public cookie-less app |
 | `PORT` | Render backend | no | default `8000` |
 | `VITE_BACKEND_URL` | Netlify build env | yes | UI → backend URL |
 

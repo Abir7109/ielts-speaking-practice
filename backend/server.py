@@ -45,14 +45,16 @@ UI_TOOLS = {
 
 
 def _parse_origins():
-    raw = (os.getenv("CORS_ORIGINS") or "*").strip()
-    if not raw or raw == "*":
-        return "*"
-    return [o.strip() for o in raw.split(",") if o.strip()]
+    # Public, cookie-less practice app: allow every origin so any Netlify site,
+    # preview URL, or custom domain works without redeploying the backend.
+    raw = (os.getenv("CORS_ORIGINS") or "").strip()
+    if raw and raw != "*":
+        log.info(f"[CORS] CORS_ORIGINS set ({raw}) but allowing all origins by design")
+    return "*"
 
 
 _ORIGINS = _parse_origins()
-_fastapi_origins = ["*"] if _ORIGINS == "*" else _ORIGINS
+_fastapi_origins = ["*"]
 
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=_ORIGINS)
 sessions: dict[str, VoiceSession] = {}
