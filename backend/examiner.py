@@ -3,6 +3,7 @@
 Pure logic: no sockets, no LLM calls. The voice layer owns I/O and calls into
 this class; evaluation happens in evaluation.py and is fed back via record_answer().
 """
+import re
 import time
 from datetime import date, datetime
 
@@ -10,6 +11,35 @@ from logger import log
 from question_bank import get_part1_questions, get_part2_cue_card, get_part3_questions
 from rubric import CRITERIA, CRITERIA_LABELS, overall_band, round_half_up
 import store
+
+_BAND_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+
+
+def band_words(value) -> str:
+    """Speak band scores naturally: 5.5 -> 'five point five', 7.0 -> 'seven'."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "zero"
+    whole = int(v)
+    whole = max(0, min(9, whole))
+    frac = round((v - whole) * 2)
+    if frac == 1:
+        return f"{_BAND_WORDS[whole]} point five"
+    return _BAND_WORDS[whole]
+
+
+def _clip_sentence(text: str, max_words: int = 26) -> str:
+    """First sentence of text, capped so spoken feedback stays short."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    sentence = parts[0] if parts else text
+    words = sentence.split()
+    if len(words) > max_words:
+        return " ".join(words[:max_words]).rstrip(",;:") + "..."
+    return sentence
 
 
 class Examiner:
@@ -198,27 +228,29 @@ class Examiner:
         )
 
     def spoken_feedback(self, evaluation: dict) -> str:
-        """Band + why it is not higher + top correction. Caller appends next script."""
-        band = evaluation.get("overall_band", "?")
+        """Band + main limit + one fix, phrased for natural speech (max ~3 sentences)."""
+        band = band_words(evaluation.get("overall_band", 0))
         scores = evaluation.get("band_scores") or {}
         crit_fb = evaluation.get("criterion_feedback") or {}
-        speech = f"Your band for that answer is {band}."
+        speech = f"That answer scores a band {band}."
 
         if scores and crit_fb:
             weakest = min(scores, key=lambda c: scores[c])
-            reason = (crit_fb.get(weakest) or {}).get("reason") or ""
+            item = crit_fb.get(weakest) or {}
+            reason = _clip_sentence(item.get("reason") or "")
             label = CRITERIA_LABELS.get(weakest, "one criterion")
             if reason:
-                speech += f" The main limit is {label}: {reason}"
+                speech += f" The main thing holding it back was {label.lower()}: {reason}"
+            next_step = _clip_sentence(item.get("next_step") or "", 20)
+            if next_step:
+                speech += f" Next time, {next_step}"
 
-        tip = ""
-        imps = evaluation.get("improvements") or []
-        if imps and isinstance(imps[0], dict):
-            tip = imps[0].get("better_version") or imps[0].get("issue") or ""
-        elif imps and isinstance(imps[0], str):
-            tip = imps[0]
-        if tip:
-            speech += f" Top fix: {tip}"
+        if not crit_fb:
+            imps = evaluation.get("improvements") or []
+            if imps and isinstance(imps[0], dict):
+                issue = _clip_sentence(imps[0].get("issue") or "", 20)
+                if issue:
+                    speech += f" The main thing to improve: {issue}"
         return speech
 
     def spoken_repeat(self) -> str:
@@ -312,18 +344,21 @@ class Examiner:
     def spoken_report(self, report: dict) -> str:
         scores = report.get("band_scores", {})
         parts = report.get("part_scores", {})
-        part_txt = ", ".join(f"Part {k}: {v}" for k, v in sorted(parts.items()))
+        part_txt = ", ".join(
+            f"Part {k}: {band_words(v)}" for k, v in sorted(parts.items())
+        )
         return (
-            f"That concludes your test. Your estimated overall band is "
-            f"{report.get('overall_band', 0)}. "
-            f"Fluency {scores.get('fluency_coherence', 0)}, "
-            f"Vocabulary {scores.get('lexical_resource', 0)}, "
-            f"Grammar {scores.get('grammatical_range', 0)}, "
-            f"Pronunciation {scores.get('pronunciation', 0)}. "
+            f"That brings us to the end of the test — thank you for speaking with me. "
+            f"Your estimated overall band is {band_words(report.get('overall_band', 0))}. "
+            f"Fluency {band_words(scores.get('fluency_coherence', 0))}, "
+            f"Vocabulary {band_words(scores.get('lexical_resource', 0))}, "
+            f"Grammar {band_words(scores.get('grammatical_range', 0))}, "
+            f"Pronunciation {band_words(scores.get('pronunciation', 0))}. "
             f"{part_txt}. "
             f"Your strongest area is {report.get('strongest_criterion', '—')}; "
-            f"focus next on {report.get('weakest_criterion', 'your weakest area')}. "
-            f"The full report with every correction is now on your screen."
+            f"the one to work on next is {report.get('weakest_criterion', 'your weakest area')}. "
+            "You'll find the full report with every correction on your screen. "
+            "Well done for finishing — practising like this really does help."
         )
 
     # ── persistence ─────────────────────────────────────────────

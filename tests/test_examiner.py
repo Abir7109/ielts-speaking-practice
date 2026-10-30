@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
-from examiner import Examiner
+from examiner import Examiner, band_words
 
 
 def _fake_eval(band=6.0, part=1, question="Q"):
@@ -160,8 +160,36 @@ class TestReport(unittest.TestCase):
         ex.record_answer("x", _fake_eval(6.5))
         report = ex.build_report()
         spoken = ex.spoken_report(report)
-        self.assertIn("6.5", spoken)
+        self.assertIn("six point five", spoken)
         self.assertIn("Pronunciation", spoken)
+        self.assertNotIn("6.5", spoken)
+
+
+class TestSpokenNumbers(unittest.TestCase):
+    def test_band_words(self):
+        self.assertEqual(band_words(5.5), "five point five")
+        self.assertEqual(band_words(7.0), "seven")
+        self.assertEqual(band_words(6.5), "six point five")
+        self.assertEqual(band_words(0), "zero")
+
+    def test_spoken_feedback_is_short_and_natural(self):
+        ex = Examiner("")
+        ev = _fake_eval(5.5)
+        ev["band_scores"]["lexical_resource"] = 5.0
+        ev["criterion_feedback"] = {
+            c: {
+                "reason": "Vocabulary is basic and repetitive throughout the answer.",
+                "evidence": "I like music because music is good.",
+                "next_step": "Use one precise word for each idea.",
+            }
+            for c in ("fluency_coherence", "lexical_resource",
+                      "grammatical_range", "pronunciation")
+        }
+        spoken = ex.spoken_feedback(ev)
+        self.assertTrue(spoken.startswith("That answer scores a band five point five."))
+        self.assertIn("lexical resource", spoken.lower())
+        self.assertNotIn("Top fix:", spoken)
+        self.assertLess(len(spoken.split()), 60)
 
 
 class TestProgressNoClient(unittest.TestCase):

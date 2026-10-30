@@ -24,7 +24,7 @@ from google.genai import types
 
 import evaluation as eval_mod
 import store
-from examiner import Examiner
+from examiner import Examiner, band_words
 from ielts_tools import build_tools
 from logger import log
 from prompts import GREETING_START_MESSAGE, build_examiner_prompt
@@ -624,8 +624,8 @@ class VoiceSession:
                 self._reset_answer_buffers()
                 await self._emit_state("answering")
                 self._maybe_start_prep_timer(payload)
-                return (feedback + ex.spoken_question(payload)).strip()
-            return (feedback + await self._finish_inner()).strip()
+                return (feedback + " " + ex.spoken_question(payload)).strip()
+            return (feedback + " " + await self._finish_inner()).strip()
 
         if name == "repeat_question":
             if ex.current_payload is None:
@@ -634,35 +634,53 @@ class VoiceSession:
 
         if name == "finish_test":
             feedback = await self._settle_pending_answer()
-            return (feedback + await self._finish_inner()).strip()
+            return (feedback + " " + await self._finish_inner()).strip()
 
         if name == "set_goal":
             info = ex.set_goal(args.get("target_band"), args.get("exam_date"))
             progress = ex.get_progress() if ex.client_id else {}
             await self._emit("client_progress", {"progress": progress})
             return (
-                f"Saved: target band {info.get('target_band')}, "
-                f"exam date {info.get('exam_date') or 'not set'}. "
-                "Tell the candidate it's saved, then continue the test."
+                f"Tell the candidate you've noted their target band of "
+                f"{band_words(info.get('target_band'))} and exam date "
+                f"{info.get('exam_date') or 'not set yet'}, then continue the test naturally."
             )
 
         if name == "get_progress":
             progress = ex.get_progress()
+            if self._last_report:
+                avg = progress.get("average_bands") or {}
+                if not avg.get("speaking"):
+                    avg["speaking"] = self._last_report.get("overall_band")
+                    avg["overall"] = avg["speaking"]
+                    progress["average_bands"] = avg
+                if not progress.get("weak_areas") and self._last_report.get("weakest_criterion"):
+                    progress["weak_areas"] = [self._last_report["weakest_criterion"]]
             await self._emit("client_progress", {"progress": progress})
             await self._emit("panel_open", {
                 "panelType": "IELTSDashboard", "direction": "right",
                 "data": self._dashboard_data(progress),
             })
-            avg = progress.get("average_bands") or {}
-            weak = ", ".join(progress.get("weak_areas") or []) or "not identified yet"
-            return (
-                f"Tell the candidate: speaking average is "
-                f"{avg.get('speaking') or 'not yet scored'} out of 9, "
-                f"target {progress.get('target_band', 7.0)}, "
-                f"streak {progress.get('streak_days', 0)} days, "
-                f"weakest areas: {weak}. "
-                "The dashboard is open on screen. Then continue the test."
+            avg_band = (progress.get("average_bands") or {}).get("speaking")
+            target = band_words(progress.get("target_band", 7.0))
+            streak = int(progress.get("streak_days") or 0)
+            streak_txt = (
+                f"a streak of {streak} days" if streak else "no practice streak yet"
             )
+            weak = ", ".join(progress.get("weak_areas") or [])
+            if avg_band:
+                summary = (
+                    f"Tell the candidate, warmly: their speaking average is band "
+                    f"{band_words(avg_band)} out of nine, their target is {target}, "
+                    f"{streak_txt}, and the area to work on is {weak or 'not identified yet'}."
+                )
+            else:
+                summary = (
+                    "Tell the candidate, warmly, that this is their first scored session, "
+                    f"so there is no average yet. Their target is {target} and they have "
+                    f"{streak_txt}. "
+                )
+            return summary + " The dashboard is open on screen. Then continue naturally with the test."
 
         return f"Unknown tool: {name}"
 
