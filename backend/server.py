@@ -186,7 +186,7 @@ async def browser_audio(sid, data):
     session.feed_browser_audio(pcm)
 
 
-# ── UI-triggered tools (same 7-tool world, model narrates result) ──
+# ── UI-triggered tools (same 6-tool world, model narrates result) ──
 
 @sio.on("run_ielts_tool")
 async def run_ielts_tool(sid, data=None):

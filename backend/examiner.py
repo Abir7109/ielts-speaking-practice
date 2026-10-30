@@ -59,7 +59,8 @@ class Examiner:
         self.current_payload = None
         self._evaluated_current = True   # nothing pending until a question is issued
 
-        self.answers: list[dict] = []     # {part, question, answer_text, evaluation}
+        self.answers: list[dict] = []     # {part, question, answer_text}
+        self.part_evaluations: dict[int, dict] = {}  # scored once per part
 
     # ── lifecycle ────────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ class Examiner:
         self.started_at = datetime.now().isoformat()
         self.finished = False
         self.answers = []
+        self.part_evaluations = {}
         self._spoken_part = None
 
         if mode in ("full", "part1"):
@@ -166,22 +168,54 @@ class Examiner:
 
     @property
     def awaiting_answer(self) -> bool:
-        """True when a question has been issued but not yet evaluated."""
+        """True when a question has been issued but not yet answered."""
         return self.current_payload is not None and not self._evaluated_current
 
-    def record_answer(self, answer_text: str, evaluation: dict) -> dict:
+    def current_part_finished(self) -> bool:
+        """True when the current part has no more queued questions."""
+        if not self.part:
+            return False
+        queue = self._queues.get(self.part) or []
+        return self._cursor.get(self.part, 0) >= len(queue)
+
+    def part_answers(self, part: int) -> list[dict]:
+        return [
+            a for a in self.answers
+            if a.get("part") == part and (a.get("answer_text") or "").strip()
+        ]
+
+    def record_answer(self, answer_text: str, evaluation: dict | None = None) -> dict:
+        """Store a raw answer. Scoring is attached later, once per part."""
+        ev = evaluation or {}
         entry = {
-            "part": evaluation.get("part", self.part),
-            "question": evaluation.get("question") or self.current_question or "",
+            "part": int(ev.get("part") or self.part or 1),
+            "question": ev.get("question") or self.current_question or "",
             "answer_text": answer_text,
-            "evaluation": evaluation,
         }
+        if evaluation:
+            entry["evaluation"] = evaluation
         self.answers.append(entry)
         self._evaluated_current = True
         return entry
 
+    def record_part_evaluation(self, part: int, evaluation: dict) -> dict:
+        """Attach one scored evaluation to a whole part."""
+        part = int(part or 1)
+        evaluation = dict(evaluation or {})
+        evaluation["part"] = part
+        evaluation.setdefault(
+            "question",
+            " | ".join(
+                str(a.get("question") or "")
+                for a in self.answers
+                if a.get("part") == part and a.get("question")
+            ),
+        )
+        self.part_evaluations[part] = evaluation
+        return evaluation
+
     def skip_evaluation(self):
-        """Mark current question handled without scoring (no answer captured)."""
+        """Mark current question handled without capturing an answer."""
         self._evaluated_current = True
 
     # ── spoken scripts (verbatim protocol) ──────────────────────
@@ -228,11 +262,13 @@ class Examiner:
         )
 
     def spoken_feedback(self, evaluation: dict) -> str:
-        """Band + main limit + one fix, phrased for natural speech (max ~3 sentences)."""
+        """Part band + main limit + one fix, phrased for natural speech."""
         band = band_words(evaluation.get("overall_band", 0))
+        part = evaluation.get("part")
         scores = evaluation.get("band_scores") or {}
         crit_fb = evaluation.get("criterion_feedback") or {}
-        speech = f"That answer scores a band {band}."
+        where = f"Part {part}" if part else "That part"
+        speech = f"{where} scores a band {band}."
 
         if scores and crit_fb:
             weakest = min(scores, key=lambda c: scores[c])
@@ -258,18 +294,39 @@ class Examiner:
 
     # ── finish / report ─────────────────────────────────────────
 
+    def _report_evaluations(self) -> list[dict]:
+        """Part-level evals when present; legacy per-answer evals as fallback."""
+        if self.part_evaluations:
+            return [
+                self.part_evaluations[p]
+                for p in sorted(self.part_evaluations)
+            ]
+        return [
+            a["evaluation"] for a in self.answers if a.get("evaluation")
+        ]
+
     def build_report(self) -> dict:
-        per_part: dict[int, list] = {}
-        for a in self.answers:
-            per_part.setdefault(a["part"], []).append(
-                a["evaluation"].get("overall_band", 0)
-            )
-        part_scores = {
-            str(p): round_half_up(sum(v) / len(v))
-            for p, v in per_part.items() if v
-        }
-        if self.answers:
-            all_bands = [a["evaluation"].get("overall_band", 0) for a in self.answers]
+        evals = self._report_evaluations()
+
+        if self.part_evaluations:
+            part_scores = {
+                str(p): round_half_up(float(ev.get("overall_band", 0) or 0))
+                for p, ev in sorted(self.part_evaluations.items())
+            }
+        else:
+            per_part: dict[int, list] = {}
+            for a in self.answers:
+                if a.get("evaluation"):
+                    per_part.setdefault(a["part"], []).append(
+                        a["evaluation"].get("overall_band", 0)
+                    )
+            part_scores = {
+                str(p): round_half_up(sum(v) / len(v))
+                for p, v in per_part.items() if v
+            }
+
+        if evals:
+            all_bands = [float(ev.get("overall_band", 0) or 0) for ev in evals]
             overall = round_half_up(sum(all_bands) / len(all_bands))
         else:
             overall = 0.0
@@ -277,8 +334,8 @@ class Examiner:
         crit_scores = {}
         for crit in CRITERIA:
             vals = [
-                float(a["evaluation"].get("band_scores", {}).get(crit, 0) or 0)
-                for a in self.answers
+                float(ev.get("band_scores", {}).get(crit, 0) or 0)
+                for ev in evals
             ]
             crit_scores[crit] = round_half_up(sum(vals) / len(vals)) if vals else 0.0
 
@@ -288,8 +345,7 @@ class Examiner:
         est_reasons: dict[str, list[str]] = {c: [] for c in CRITERIA}
         est_next: dict[str, str] = {c: "" for c in CRITERIA}
         scoring_modes = set()
-        for a in self.answers:
-            ev = a["evaluation"]
+        for ev in evals:
             corrections.extend(ev.get("grammar_errors") or [])
             strengths.extend(ev.get("strengths") or [])
             if ev.get("band7_tip"):
@@ -305,8 +361,8 @@ class Examiner:
                 if not est_next[crit] and item.get("next_step"):
                     est_next[crit] = str(item["next_step"]).strip()
 
-        weakest = min(crit_scores, key=lambda c: crit_scores[c]) if self.answers else None
-        strongest = max(crit_scores, key=lambda c: crit_scores[c]) if self.answers else None
+        weakest = min(crit_scores, key=lambda c: crit_scores[c]) if evals else None
+        strongest = max(crit_scores, key=lambda c: crit_scores[c]) if evals else None
 
         criterion_feedback = {
             crit: {
@@ -372,22 +428,22 @@ class Examiner:
             "started_at": self.started_at,
             "report": report,
         }
-        answers = [
-            {
+        answers = []
+        for a in self.answers:
+            ev = a.get("evaluation") or self.part_evaluations.get(a["part"]) or {}
+            answers.append({
                 "part": a["part"],
                 "question": a["question"],
                 "answer_text": a.get("answer_text", ""),
-                "corrected_transcript": a["evaluation"].get("corrected_transcript", ""),
-                "band_scores": a["evaluation"].get("band_scores", {}),
-                "overall_band": a["evaluation"].get("overall_band", 0),
-                "grammar_errors": a["evaluation"].get("grammar_errors", []),
-                "vocabulary_feedback": a["evaluation"].get("vocabulary_feedback", {}),
-                "pronunciation_detail": a["evaluation"].get("pronunciation_detail", {}),
-                "word_count": a["evaluation"].get("word_count", 0),
-                "filler_words_count": a["evaluation"].get("filler_words_count", 0),
-            }
-            for a in self.answers
-        ]
+                "corrected_transcript": ev.get("corrected_transcript", ""),
+                "band_scores": ev.get("band_scores", {}),
+                "overall_band": ev.get("overall_band", 0),
+                "grammar_errors": ev.get("grammar_errors", []),
+                "vocabulary_feedback": ev.get("vocabulary_feedback", {}),
+                "pronunciation_detail": ev.get("pronunciation_detail", {}),
+                "word_count": ev.get("word_count", 0),
+                "filler_words_count": ev.get("filler_words_count", 0),
+            })
         sid = store.save_session(session, answers)
         self._update_progress(report)
         return sid

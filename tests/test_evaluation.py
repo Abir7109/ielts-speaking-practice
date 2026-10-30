@@ -108,6 +108,30 @@ class TestEvaluateAnswerOffline(unittest.TestCase):
         self.assertEqual(ev["pronunciation_detail"]["intelligibility"], "unknown")
 
 
+class TestEvaluatePartOffline(unittest.TestCase):
+    def test_part_merge_combines_all_answers(self):
+        answers = [
+            {"question": "Do you like reading?", "answer_text": "I enjoy reading because it helps me relax."},
+            {"question": "What do you read?", "answer_text": "I usually read novels and history books in the evening."},
+        ]
+        with patch.dict(os.environ, _OFFLINE_ENV):
+            ev = asyncio.run(evaluation.evaluate_part(answers, b"", 1))
+        self.assertEqual(set(ev["band_scores"].keys()), set(rubric.CRITERIA))
+        self.assertEqual(ev["part"], 1)
+        self.assertIn("Do you like reading?", ev["question"])
+        self.assertIn("text-evaluator-unavailable", ev["degraded"])
+
+    def test_part_prompt_mentions_whole_part(self):
+        from prompts import build_part_evaluation_prompt
+        prompt = build_part_evaluation_prompt(
+            [("Q1", "A one"), ("Q2", "A two")], 3
+        )
+        self.assertIn("WHOLE IELTS Speaking Part 3", prompt)
+        self.assertIn("A one", prompt)
+        self.assertIn("A two", prompt)
+        self.assertIn("Do NOT default to Band 5.5", prompt)
+
+
 class TestTextEvaluatorRouting(unittest.TestCase):
     def test_gemini_used_when_key_configured(self):
         payload = (

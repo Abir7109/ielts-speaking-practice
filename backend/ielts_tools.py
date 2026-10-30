@@ -30,28 +30,11 @@ IELTS_TOOLS = [
         },
     },
     {
-        "name": "evaluate_answer",
-        "description": (
-            "Evaluate the candidate's most recent spoken answer. The system already "
-            "captured the transcript and audio — do NOT pass the transcript. The result "
-            "contains the EXACT feedback to speak aloud word for word."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "part": {
-                    "type": "integer",
-                    "description": "Speaking part of the answer being evaluated (1, 2 or 3)",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
         "name": "next_question",
         "description": (
-            "Move to the next question of the test. Automatically evaluates any answer "
-            "that was not yet evaluated, then returns the EXACT text to speak aloud."
+            "Record the candidate's answer and move to the next question. At the end of "
+            "each part this also scores the whole part and returns that feedback plus the "
+            "next question as the EXACT text to speak aloud."
         ),
         "parameters": {
             "type": "object",

@@ -35,10 +35,12 @@ RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 512
 MAX_ANSWER_SECONDS = 300
 MAX_ANSWER_BYTES = SEND_SAMPLE_RATE * 2 * MAX_ANSWER_SECONDS
+MAX_PART_AUDIO_SECONDS = 240
+MAX_PART_AUDIO_BYTES = SEND_SAMPLE_RATE * 2 * MAX_PART_AUDIO_SECONDS
 MIN_ANSWER_AUDIO_BYTES = SEND_SAMPLE_RATE * 2  # 1s — below this is "no answer"
 EVAL_LIMIT_PER_HOUR = 30
 MAX_RETRIES = 10
-SPEECH_TOOLS = {"start_test", "evaluate_answer", "next_question", "repeat_question", "finish_test"}
+SPEECH_TOOLS = {"start_test", "next_question", "repeat_question", "finish_test"}
 
 _GEMINI_CLIENT = None
 
@@ -80,10 +82,12 @@ class VoiceSession:
         self._last_input_transcription = ""
         self._last_output_transcription = ""
         self._script_transcript_active = False
+        self._script_transcript_seen = False
 
         # candidate answer capture (owned by backend, never model-supplied)
         self._answer_text = ""
         self._answer_pcm = bytearray()
+        self._part_pcm = bytearray()   # audio for the current part (scored at part end)
         self._eval_times: list[float] = []
 
         self._prep_task: asyncio.Task | None = None
@@ -135,6 +139,10 @@ class VoiceSession:
         # echo-safe: drop mic while the model speaks
         if self._model_is_speaking or self._tools_running:
             return
+        # A new candidate turn begins — stop suppressing model transcript text.
+        self._script_transcript_active = False
+        self._script_transcript_seen = False
+        self._last_output_transcription = ""
         try:
             self.audio_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
         except asyncio.QueueFull:
@@ -175,6 +183,45 @@ class VoiceSession:
             return False
         self._eval_times.append(time.time())
         return True
+
+    def _stash_current_answer(self) -> bool:
+        """Store the current answer + audio; scoring happens once per part."""
+        ex = self.examiner
+        if not ex.awaiting_answer:
+            return False
+        answer = self._answer_text.strip()
+        pcm = bytes(self._answer_pcm)
+        if not answer and len(pcm) < MIN_ANSWER_AUDIO_BYTES:
+            ex.skip_evaluation()
+            self._reset_answer_buffers()
+            return False
+        ex.record_answer(answer)
+        room = MAX_PART_AUDIO_BYTES - len(self._part_pcm)
+        if room > 0 and pcm:
+            self._part_pcm.extend(pcm[:room])
+            gap = b"\x00\x00" * int(SEND_SAMPLE_RATE * 0.3)
+            if len(self._part_pcm) + len(gap) <= MAX_PART_AUDIO_BYTES:
+                self._part_pcm.extend(gap)
+        self._reset_answer_buffers()
+        return True
+
+    async def _evaluate_current_part(self) -> dict | None:
+        ex = self.examiner
+        part = int(ex.part or 1)
+        if part in ex.part_evaluations:
+            return ex.part_evaluations[part]
+        answers = ex.part_answers(part)
+        if not answers:
+            return None
+        if not self._eval_budget_ok():
+            return None
+        await self._emit_state("evaluating")
+        ev = await eval_mod.evaluate_part(answers, bytes(self._part_pcm), part)
+        ex.record_part_evaluation(part, ev)
+        self._part_pcm.clear()
+        await self._emit("answer_evaluated", {"evaluation": ev})
+        await self._emit_state("feedback")
+        return ev
 
     # ── test state events ───────────────────────────────────────
 
@@ -456,9 +503,13 @@ class VoiceSession:
                             if delta:
                                 await self._emit("transcription", {"sender": "Candidate", "text": delta})
 
-                        if response.server_content.output_transcription and not self._script_transcript_active:
+                        if response.server_content.output_transcription:
                             transcript = response.server_content.output_transcription.text
-                            if transcript and transcript != self._last_output_transcription:
+                            if self._script_transcript_active:
+                                # The exact tool script was already emitted; the model is
+                                # now speaking it. Suppress the duplicate live transcript.
+                                self._script_transcript_seen = True
+                            elif transcript and transcript != self._last_output_transcription:
                                 delta = transcript
                                 if transcript.startswith(self._last_output_transcription):
                                     delta = transcript[len(self._last_output_transcription):]
@@ -467,8 +518,12 @@ class VoiceSession:
                                     await self._emit("transcription", {"sender": "Examiner", "text": delta})
 
                         if response.server_content.turn_complete:
-                            self._script_transcript_active = False
-                            self._last_output_transcription = ""
+                            if self._script_transcript_active and self._script_transcript_seen:
+                                self._script_transcript_active = False
+                                self._script_transcript_seen = False
+                                self._last_output_transcription = ""
+                            elif not self._script_transcript_active:
+                                self._last_output_transcription = ""
 
                     if response.tool_call:
                         function_responses = []
@@ -606,46 +661,26 @@ class VoiceSession:
             if not payload:
                 return "No questions available for that topic. Tell the candidate to try a different topic."
             self._reset_answer_buffers()
+            self._part_pcm.clear()
             self._last_report = None
             await self._emit_state("answering")
             self._maybe_start_prep_timer(payload)
             return ex.spoken_question(payload)
 
-        if name == "evaluate_answer":
-            if not ex.awaiting_answer:
-                return "This answer has already been evaluated. Move on with next_question."
-            answer = self._answer_text.strip()
-            pcm = bytes(self._answer_pcm)
-            if not answer and len(pcm) < MIN_ANSWER_AUDIO_BYTES:
-                return (
-                    "I didn't catch a clear answer to that question. "
-                    "Ask the candidate to try answering again — do NOT advance."
-                )
-            if not self._eval_budget_ok():
-                ex.skip_evaluation()
-                return (
-                    "The evaluation limit for this session has been reached. "
-                    "Do not score this answer — say 'Let's continue' and go to the next "
-                    "question with next_question."
-                )
-            await self._emit_state("evaluating")
-            part = int(args.get("part") or ex.part or 1)
-            ev = await eval_mod.evaluate_answer(answer, pcm, part, ex.current_question or "")
-            ex.record_answer(answer, ev)
-            self._reset_answer_buffers()
-            await self._emit("answer_evaluated", {"evaluation": ev})
-            await self._emit_state("feedback")
-            return ex.spoken_feedback(ev)
-
         if name == "next_question":
-            feedback = await self._settle_pending_answer()
+            self._stash_current_answer()
+            feedback = ""
+            if ex.current_part_finished() and ex.part not in ex.part_evaluations:
+                ev = await self._evaluate_current_part()
+                if ev:
+                    feedback = ex.spoken_feedback(ev)
             payload = ex.advance()
             if payload:
                 self._reset_answer_buffers()
                 await self._emit_state("answering")
                 self._maybe_start_prep_timer(payload)
                 return (feedback + " " + ex.spoken_question(payload)).strip()
-            return (feedback + " " + await self._finish_inner()).strip()
+            return await self._finish_inner()
 
         if name == "repeat_question":
             if ex.current_payload is None:
@@ -653,8 +688,10 @@ class VoiceSession:
             return ex.spoken_repeat()
 
         if name == "finish_test":
-            feedback = await self._settle_pending_answer()
-            return (feedback + " " + await self._finish_inner()).strip()
+            self._stash_current_answer()
+            if ex.part and ex.part not in ex.part_evaluations:
+                await self._evaluate_current_part()
+            return await self._finish_inner()
 
         if name == "set_goal":
             info = ex.set_goal(args.get("target_band"), args.get("exam_date"))
@@ -703,27 +740,6 @@ class VoiceSession:
             return summary + " The dashboard is open on screen. Then continue naturally with the test."
 
         return f"Unknown tool: {name}"
-
-    async def _settle_pending_answer(self) -> str:
-        """Evaluate a captured-but-unscored answer (used by next_question/finish)."""
-        ex = self.examiner
-        if not ex.awaiting_answer:
-            return ""
-        answer = self._answer_text.strip()
-        pcm = bytes(self._answer_pcm)
-        if not answer and len(pcm) < MIN_ANSWER_AUDIO_BYTES:
-            ex.skip_evaluation()
-            return ""
-        if not self._eval_budget_ok():
-            ex.skip_evaluation()
-            return ""
-        await self._emit_state("evaluating")
-        ev = await eval_mod.evaluate_answer(answer, pcm, ex.part or 1, ex.current_question or "")
-        ex.record_answer(answer, ev)
-        self._reset_answer_buffers()
-        await self._emit("answer_evaluated", {"evaluation": ev})
-        await self._emit_state("feedback")
-        return ex.spoken_feedback(ev) + " "
 
     async def _finish_inner(self) -> str:
         ex = self.examiner

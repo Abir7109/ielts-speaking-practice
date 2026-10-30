@@ -34,13 +34,12 @@ class TestBuildTools(unittest.TestCase):
         )
         self.assertEqual(len(config.tools), 1)
 
-    def test_exactly_seven_tools(self):
-        self.assertEqual(len(IELTS_TOOL_NAMES), 7)
+    def test_exactly_six_tools(self):
+        self.assertEqual(len(IELTS_TOOL_NAMES), 6)
         self.assertEqual(
             set(IELTS_TOOL_NAMES),
             {
                 "start_test",
-                "evaluate_answer",
                 "next_question",
                 "repeat_question",
                 "finish_test",

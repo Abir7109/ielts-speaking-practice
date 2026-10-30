@@ -25,7 +25,11 @@ from google import genai
 from google.genai import types
 
 from logger import log
-from prompts import build_pronunciation_prompt, build_text_evaluation_prompt
+from prompts import (
+    build_part_evaluation_prompt,
+    build_pronunciation_prompt,
+    build_text_evaluation_prompt,
+)
 from rubric import CRITERIA, clamp_band, overall_band
 
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
@@ -472,8 +476,10 @@ def _heuristic_text_evaluation(answer: str) -> dict:
     }
 
 
-async def _text_evaluation(answer: str, part: int, question: str) -> dict:
-    prompt = build_text_evaluation_prompt(answer, part, question)
+async def _text_evaluation(
+    answer: str, part: int, question: str, prompt: str | None = None
+) -> dict:
+    prompt = prompt or build_text_evaluation_prompt(answer, part, question)
     primary = eval_mode()
     if primary == "gemini":
         order = ["gemini", "deepseek"]
@@ -557,9 +563,15 @@ def _normalise_criterion_feedback(raw) -> dict:
     return out
 
 
-async def evaluate_answer(answer: str, pcm: bytes, part: int, question: str) -> dict:
+async def _merge_evaluations(
+    answer: str,
+    pcm: bytes,
+    part: int,
+    question: str,
+    prompt: str,
+) -> dict:
     """Run text + pronunciation evaluations in parallel and merge them."""
-    text_task = _text_evaluation(answer or "", part, question or "")
+    text_task = _text_evaluation(answer or "", part, question or "", prompt=prompt)
     pron_task = _pronunciation_evaluation(pcm or b"", answer or "", part)
     text_result, pron_result = await asyncio.gather(text_task, pron_task)
 
@@ -609,3 +621,34 @@ async def evaluate_answer(answer: str, pcm: bytes, part: int, question: str) -> 
     if degraded:
         evaluation["degraded"] = degraded
     return evaluation
+
+
+async def evaluate_answer(answer: str, pcm: bytes, part: int, question: str) -> dict:
+    """Score a single answer (kept for targeted checks and tests)."""
+    return await _merge_evaluations(
+        answer, pcm, part, question,
+        build_text_evaluation_prompt(answer or "", part, question or ""),
+    )
+
+
+async def evaluate_part(answers: list[dict], pcm: bytes, part: int) -> dict:
+    """Score a whole IELTS part (all Q/A turns) as one performance."""
+    pairs = [
+        (
+            str(a.get("question") or "").strip(),
+            str(a.get("answer_text") or "").strip(),
+        )
+        for a in answers
+        if str(a.get("answer_text") or "").strip()
+    ]
+    if not pairs:
+        pairs = [("", "")]
+    transcript = "\n\n".join(
+        f"Q{i + 1}: {q or '(question not captured)'}\nA{i + 1}: {a}"
+        for i, (q, a) in enumerate(pairs)
+    )
+    questions = " | ".join(q for q, _a in pairs if q)
+    return await _merge_evaluations(
+        transcript, pcm, part, questions,
+        build_part_evaluation_prompt(pairs, part),
+    )

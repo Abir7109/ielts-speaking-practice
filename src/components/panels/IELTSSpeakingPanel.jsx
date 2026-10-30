@@ -56,7 +56,7 @@ function QuestionView({ data }) {
           marginBottom: 12,
           letterSpacing: '0.1em',
         }}>
-          SCORING YOUR ANSWER...
+          SCORING THIS PART...
         </div>
       )}
 
@@ -210,7 +210,7 @@ export default function IELTSSpeakingPanel({ data }) {
 
   if (isTestState) return <QuestionView data={data} />
 
-  const { band_scores, overall_band, strengths, improvements,
+  const { band_scores, overall_band, part, strengths, improvements,
           vocabulary_feedback, grammar_errors, corrected_transcript,
           pronunciation_detail, band7_tip, filler_words_count,
           criterion_feedback, why_band_summary, degraded, evaluator } = data
@@ -230,7 +230,7 @@ export default function IELTSSpeakingPanel({ data }) {
           fontSize: 11, color: 'var(--soda-accent)',
           letterSpacing: '0.15em', marginBottom: 4
         }}>
-          SPEAKING EVALUATION
+          SPEAKING EVALUATION{part ? ` — PART ${part}` : ''}
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <span style={{
@@ -245,7 +245,7 @@ export default function IELTSSpeakingPanel({ data }) {
             fontFamily: 'Space Grotesk, sans-serif',
             fontSize: 14, color: 'var(--soda-muted)'
           }}>
-            Overall Band
+            {part ? `Part ${part} Band` : 'Overall Band'}
           </span>
           {filler_words_count > 0 && (
             <span style={{

@@ -127,6 +127,32 @@ class TestReport(unittest.TestCase):
         self.assertEqual(len(report["corrections"]), 2)
         self.assertTrue(ex.finished)
 
+    def test_part_evaluation_drives_report(self):
+        ex = Examiner("")
+        payload = ex.start("part1")
+        ex.record_answer("first", None)
+        ex.skip_evaluation()
+        payload = ex.advance()
+        ex.record_answer("second", None)
+        ex.record_part_evaluation(1, _fake_eval(7.0, 1))
+
+        report = ex.build_report()
+        self.assertEqual(report["part_scores"], {"1": 7.0})
+        self.assertEqual(report["overall_band"], 7.0)
+        self.assertEqual(report["answer_count"], 2)
+        self.assertEqual(report["band_scores"]["fluency_coherence"], 7.0)
+
+    def test_current_part_finished_only_after_last_question(self):
+        ex = Examiner("")
+        payload = ex.start("part1")
+        total = payload["question_total"]
+        for _ in range(total - 1):
+            self.assertFalse(ex.current_part_finished())
+            ex.skip_evaluation()
+            ex.advance()
+        self.assertTrue(ex.current_part_finished())
+        self.assertIsNone(ex.advance())
+
     def test_report_includes_criterion_explanations(self):
         ex = Examiner("")
         ex.start("part1")
@@ -186,10 +212,16 @@ class TestSpokenNumbers(unittest.TestCase):
                       "grammatical_range", "pronunciation")
         }
         spoken = ex.spoken_feedback(ev)
-        self.assertTrue(spoken.startswith("That answer scores a band five point five."))
+        self.assertTrue(spoken.startswith("Part 1 scores a band five point five."))
         self.assertIn("lexical resource", spoken.lower())
         self.assertNotIn("Top fix:", spoken)
         self.assertLess(len(spoken.split()), 60)
+
+    def test_spoken_part_feedback_names_the_part(self):
+        ex = Examiner("")
+        ev = _fake_eval(6.0, part=2)
+        spoken = ex.spoken_feedback(ev)
+        self.assertTrue(spoken.startswith("Part 2 scores a band six."))
 
 
 class TestProgressNoClient(unittest.TestCase):

@@ -32,7 +32,7 @@ Backend (Render, Docker python:3.11-slim)
   evaluation.py  DeepSeek (text 3 criteria) ∥ Gemini (pronunciation from WAV)
   rubric.py   official 0–9 descriptors × 4 criteria, half-band rounding
   question_bank.py  Part 1 topics / Part 2 cue cards / Part 3 follow-ups
-  ielts_tools.py    Gemini function declarations (7 tools only)
+  ielts_tools.py    Gemini function declarations (6 tools only)
   prompts.py  examiner system prompt + evaluation prompts
   store.py    Supabase ielts_* tables → JSONL fallback
     │
@@ -43,22 +43,22 @@ Backend (Render, Docker python:3.11-slim)
 ```
 
 ### Only-IELTS enforcement (4 layers)
-1. Gemini `tools=` = `start_test, repeat_question, evaluate_answer, next_question, finish_test, set_goal, get_progress` only.
+1. Gemini `tools=` = `start_test, repeat_question, next_question, finish_test, set_goal, get_progress` only (part scoring is backend-driven).
 2. System prompt: certified IELTS examiner, English only, exact-text-to-speak protocol, "no other abilities — steer back to the test".
-3. Backend socket allowlist: `connect, disconnect, start_audio, stop_audio, browser_audio, run_ielts_tool, ping`. Unknown events rejected. `run_ielts_tool` re-checks the 7-tool allowlist.
+3. Backend socket allowlist: `connect, disconnect, start_audio, stop_audio, browser_audio, run_ielts_tool, ping`. Unknown events rejected. `run_ielts_tool` re-checks the 6-tool allowlist.
 4. Frontend: all non-IELTS panels/hooks/animations deleted.
 
 ### Exam flow
 1. **Start Practice** click (user gesture → mic permission) → `start_audio {client_id}` → examiner greets, offers full mock / single part.
-2. Part 1: 3–4 questions, evaluate after each (spoken band + one top correction → next question).
-3. Part 2: cue card panel + 60 s prep countdown → 2-min long turn → one evaluation.
-4. Part 3: 4–5 discussion questions.
+2. Part 1: 3–4 questions; answers accumulate silently, then the whole part is scored once and spoken before Part 2.
+3. Part 2: cue card panel + 60 s prep countdown → 2-min long turn → part scored once before Part 3.
+4. Part 3: 4–5 discussion questions → part scored once; final report follows.
 5. `finish_test` → final report panel (per-part + overall, corrections, strengths, tips) + spoken summary → saved to Supabase.
 
 ### Scoring
 - Criteria: Fluency & Coherence, Lexical Resource, Grammatical Range & Accuracy, Pronunciation (full 0–9 descriptors in `rubric.py`).
 - Overall = mean of 4 → round to nearest **0.5**. Part band = mean of its answers (rounded). Final = mean of part bands (rounded). Documented approximation of examiner judgement.
-- Evaluation robustness: answer text owned by backend (from `input_transcription`, NOT model-supplied); PCM buffer owned by backend; if model skips `evaluate_answer` and calls `next_question`/`finish_test`, pending answer is evaluated first; JSON extraction (```json fence → brace slice) + 1 retry + heuristic fallback.
+- Evaluation cadence: answers are captured per question but scored **once per part** (`evaluate_part` combines all Q/A turns into one performance; pronunciation uses the concatenated part audio). No band is spoken after individual answers. Answer text and PCM are owned by the backend (from `input_transcription`/browser audio, NOT model-supplied); JSON extraction (```json fence → brace slice) + 1 retry + heuristic fallback.
 
 ### Concurrency & limits
 - `sessions: dict[sid, Session]`; destroyed on disconnect; `MAX_SESSIONS` (default 5) → friendly "practice room full".
@@ -161,6 +161,7 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-29 | `backend/server.py` | FastAPI + Socket.IO (`app_socketio`), `/status` health, allowlisted events (connect/disconnect/start_audio/stop_audio/browser_audio/run_ielts_tool/ping), MAX_SESSIONS gate, CORS env | public multi-visitor backend | imports OK; `/status` route present
 - 2026-10-29 | `requirements.txt`, `Dockerfile`, `render.yaml`, `netlify.toml` | deploy config: python:3.11-slim + uvicorn, Render docker + `/status` health, Netlify build `dist` + SPA redirect | one-command deploys | compile + build green
 - 2026-10-29 | `tests/run_all.py`, `tests/test_rubric.py`, `tests/test_examiner.py`, `tests/test_evaluation.py`, `tests/test_store.py` | stdlib unittest suite, fully offline (mock store `_connect`, blank keys) | regression safety + Render CI parity | 37/37 pass in 0.05s
+- 2026-10-30 | `backend/examiner.py`, `backend/voice.py`, `backend/evaluation.py`, `backend/prompts.py`, `backend/ielts_tools.py`, `src/components/panels/IELTSSpeakingPanel.jsx`, `tests/` | **scoring cadence fix**: removed per-answer `evaluate_answer`; answers accumulate and the whole part is scored once via `evaluate_part` (combined Q/A transcript + part audio) at part boundaries; final report aggregates part evals; part feedback says "Part N scores..."; prompt forbids per-answer bands and defaulting to 5.5; part label in UI; duplicate examiner transcript suppression fixed; tests updated (51) | user: examiner scored after every answer and returned 5.5 constantly | `py -3.11 tests/run_all.py` → 51/51 OK; `npm run build` OK
 
 ---
 
