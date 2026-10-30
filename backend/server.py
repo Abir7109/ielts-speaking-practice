@@ -105,6 +105,8 @@ async def status():
         "max_sessions": MAX_SESSIONS,
         "db": store.db_active(),
         "eval": evaluation.eval_mode(),
+        "commit": (os.getenv("RENDER_GIT_COMMIT") or "")[:7],
+        "eval_last": evaluation.last_eval_status(),
         "time": time.time(),
     }
 

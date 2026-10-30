@@ -184,7 +184,7 @@ class VoiceSession:
         self._eval_times.append(time.time())
         return True
 
-    def _stash_current_answer(self) -> bool:
+    def _stash_current_answer(self, skip_if_empty: bool = True) -> bool:
         """Store the current answer + audio; scoring happens once per part."""
         ex = self.examiner
         if not ex.awaiting_answer:
@@ -192,7 +192,8 @@ class VoiceSession:
         answer = self._answer_text.strip()
         pcm = bytes(self._answer_pcm)
         if not answer and len(pcm) < MIN_ANSWER_AUDIO_BYTES:
-            ex.skip_evaluation()
+            if skip_if_empty:
+                ex.skip_evaluation()
             self._reset_answer_buffers()
             return False
         ex.record_answer(answer)
@@ -668,7 +669,11 @@ class VoiceSession:
             return ex.spoken_question(payload)
 
         if name == "next_question":
-            self._stash_current_answer()
+            if ex.awaiting_answer and not self._stash_current_answer(skip_if_empty=False):
+                return (
+                    "I didn't catch a clear answer to that question. "
+                    "Ask the candidate to answer it again — do NOT move on."
+                )
             feedback = ""
             if ex.current_part_finished() and ex.part not in ex.part_evaluations:
                 ev = await self._evaluate_current_part()

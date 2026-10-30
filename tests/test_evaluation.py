@@ -142,7 +142,7 @@ class TestTextEvaluatorRouting(unittest.TestCase):
             '"band7_tip": "t", "filler_words_count": 0, "word_count": 10}'
         )
 
-        async def fake_gemini(prompt):
+        async def fake_gemini(prompt, **kwargs):
             return payload
 
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "DEEPSEEK_API_KEY": ""}), \

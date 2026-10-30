@@ -228,14 +228,14 @@ class Examiner:
             self._spoken_part = part
             if part == 1:
                 prefix = (
-                    "Thank you. Let's begin Part 1 — the interview section. "
+                    "Let's begin with Part 1 — the interview section. "
                     "I'll ask you some questions about familiar topics. "
                 )
             elif part == 2:
                 prefix = "Now we move to Part 2 — the long turn. "
             elif part == 3:
                 prefix = (
-                    "Thank you. Now for Part 3 — the discussion section. "
+                    "Now for Part 3 — the discussion section. "
                     "I'll ask some more abstract questions. "
                 )
 
@@ -263,12 +263,19 @@ class Examiner:
 
     def spoken_feedback(self, evaluation: dict) -> str:
         """Part band + main limit + one fix, phrased for natural speech."""
-        band = band_words(evaluation.get("overall_band", 0))
         part = evaluation.get("part")
+        where = f"Part {part}" if part else "that part"
+        degraded = evaluation.get("degraded") or []
+        if evaluation.get("evaluator") == "heuristic" or "text-evaluator-unavailable" in degraded:
+            return (
+                f"I couldn't get a reliable band for {where} just now — the scoring "
+                "service didn't respond. Your answers are saved, so let's keep going."
+            )
+
+        band = band_words(evaluation.get("overall_band", 0))
         scores = evaluation.get("band_scores") or {}
         crit_fb = evaluation.get("criterion_feedback") or {}
-        where = f"Part {part}" if part else "That part"
-        speech = f"{where} scores a band {band}."
+        speech = f"Okay, that's the end of {where}. I'd place it at band {band}."
 
         if scores and crit_fb:
             weakest = min(scores, key=lambda c: scores[c])
@@ -276,7 +283,7 @@ class Examiner:
             reason = _clip_sentence(item.get("reason") or "")
             label = CRITERIA_LABELS.get(weakest, "one criterion")
             if reason:
-                speech += f" The main thing holding it back was {label.lower()}: {reason}"
+                speech += f" The main thing holding it back is {label.lower()}: {reason}"
             next_step = _clip_sentence(item.get("next_step") or "", 20)
             if next_step:
                 speech += f" Next time, {next_step}"

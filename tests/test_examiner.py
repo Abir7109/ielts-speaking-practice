@@ -212,7 +212,11 @@ class TestSpokenNumbers(unittest.TestCase):
                       "grammatical_range", "pronunciation")
         }
         spoken = ex.spoken_feedback(ev)
-        self.assertTrue(spoken.startswith("Part 1 scores a band five point five."))
+        self.assertTrue(
+            spoken.startswith(
+                "Okay, that's the end of Part 1. I'd place it at band five point five."
+            )
+        )
         self.assertIn("lexical resource", spoken.lower())
         self.assertNotIn("Top fix:", spoken)
         self.assertLess(len(spoken.split()), 60)
@@ -221,7 +225,20 @@ class TestSpokenNumbers(unittest.TestCase):
         ex = Examiner("")
         ev = _fake_eval(6.0, part=2)
         spoken = ex.spoken_feedback(ev)
-        self.assertTrue(spoken.startswith("Part 2 scores a band six."))
+        self.assertTrue(
+            spoken.startswith(
+                "Okay, that's the end of Part 2. I'd place it at band six."
+            )
+        )
+
+    def test_degraded_feedback_does_not_invent_a_band(self):
+        ex = Examiner("")
+        ev = _fake_eval(4.0)
+        ev["evaluator"] = "heuristic"
+        ev["degraded"] = ["text-evaluator-unavailable"]
+        spoken = ex.spoken_feedback(ev)
+        self.assertIn("couldn't get a reliable band", spoken.lower())
+        self.assertNotIn("four", spoken.lower())
 
 
 class TestProgressNoClient(unittest.TestCase):

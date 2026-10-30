@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import time
 import wave
 
 from dotenv import load_dotenv
@@ -35,11 +36,24 @@ from rubric import CRITERIA, clamp_band, overall_band
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 TEXT_EVAL_PROVIDER = (os.getenv("TEXT_EVAL_PROVIDER") or "gemini").strip().lower()
 TEXT_EVAL_MODEL = os.getenv("TEXT_EVAL_MODEL", "gemini-2.5-flash")
+TEXT_EVAL_FALLBACK_MODEL = os.getenv("TEXT_EVAL_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 PRONUNCIATION_MODEL = os.getenv("PRONUNCIATION_MODEL", "gemini-2.5-flash")
 SEND_SAMPLE_RATE = 16000
 MIN_AUDIO_SECONDS = 2.0
 
 _GEMINI_CLIENT = None
+_LAST_EVAL: dict = {}
+
+
+def last_eval_status() -> dict:
+    """Diagnostics for the last text-scoring attempt (safe for /status)."""
+    return dict(_LAST_EVAL)
+
+
+def _record_eval(**fields) -> None:
+    _LAST_EVAL.clear()
+    _LAST_EVAL.update(fields)
+    _LAST_EVAL["at"] = time.time()
 
 FILLER_PATTERNS = [
     r"\bum+\b", r"\buh+\b", r"\ber+\b", r"\bah+\b", r"\blike\b",
@@ -95,19 +109,23 @@ def eval_mode() -> str:
     return "deepseek" if has_deepseek else "heuristic"
 
 
-async def _gemini_json(prompt: str) -> str:
+async def _gemini_json(
+    prompt: str, model: str | None = None, use_thinking_config: bool = True
+) -> str:
     client = _gemini_client().aio
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.2,
+        max_output_tokens=8192,
+    )
+    if use_thinking_config:
+        # 2.5 Flash thinks by default; thinking tokens were truncating the
+        # JSON verdict. Scoring is deterministic enough without them.
+        config.thinking_config = types.ThinkingConfig(thinking_budget=0)
     resp = await client.models.generate_content(
-        model=TEXT_EVAL_MODEL,
+        model=model or TEXT_EVAL_MODEL,
         contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.2,
-            max_output_tokens=8192,
-            # 2.5 Flash thinks by default; thinking tokens were truncating the
-            # JSON verdict. Scoring is deterministic enough without them.
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+        config=config,
     )
     return resp.text or ""
 
@@ -476,6 +494,30 @@ def _heuristic_text_evaluation(answer: str) -> dict:
     }
 
 
+def _has_scored_bands(parsed) -> bool:
+    """Reject partial JSON so a truncated response can never become Band 0."""
+    if not isinstance(parsed, dict):
+        return False
+    scores = parsed.get("band_scores")
+    if not isinstance(scores, dict):
+        return False
+    required = ("fluency_coherence", "lexical_resource", "grammatical_range")
+    return all(isinstance(scores.get(c), (int, float)) for c in required)
+
+
+def _gemini_attempts() -> list[tuple[str, bool]]:
+    """Primary model first, then a cheaper fallback, with/without thinking config."""
+    attempts: list[tuple[str, bool]] = []
+    for model in (TEXT_EVAL_MODEL, TEXT_EVAL_FALLBACK_MODEL):
+        if not model:
+            continue
+        for use_thinking in (True, False):
+            item = (model, use_thinking)
+            if item not in attempts:
+                attempts.append(item)
+    return attempts
+
+
 async def _text_evaluation(
     answer: str, part: int, question: str, prompt: str | None = None
 ) -> dict:
@@ -488,30 +530,72 @@ async def _text_evaluation(
     else:
         order = []
 
+    attempts_made = 0
+    last_error = ""
     for provider in order:
-        for attempt in range(2):
-            try:
-                if provider == "gemini":
-                    raw = await _gemini_json(prompt)
-                else:
+        if provider == "gemini":
+            variants = _gemini_attempts()
+            for model, use_thinking in variants:
+                attempts_made += 1
+                try:
+                    raw = await _gemini_json(
+                        prompt, model=model, use_thinking_config=use_thinking
+                    )
+                    parsed = extract_json(raw)
+                    if _has_scored_bands(parsed):
+                        parsed["_provider"] = provider
+                        _record_eval(
+                            provider=provider, model=model, ok=True,
+                            fallback=False, attempts=attempts_made, error="",
+                        )
+                        return parsed
+                    last_error = (
+                        f"JSON invalid (len={len(raw or '')}, "
+                        f"thinking={use_thinking})"
+                    )
+                    log.warning(f"[EVAL] gemini {last_error}")
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {e}"
+                    log.warning(
+                        f"[EVAL] gemini failed (model={model}, "
+                        f"thinking={use_thinking}): {last_error}"
+                    )
+                await asyncio.sleep(min(0.6 * attempts_made, 2.5))
+        else:
+            for attempt in range(2):
+                attempts_made += 1
+                try:
                     raw = await _deepseek_chat(
                         [{"role": "user", "content": prompt}],
                         temperature=0.2 if attempt == 0 else 0.0,
                     )
-                parsed = extract_json(raw)
-                if parsed and isinstance(parsed.get("band_scores"), dict):
-                    parsed["_provider"] = provider
-                    return parsed
-                log.warning(
-                    f"[EVAL] {provider} JSON parse failed "
-                    f"(attempt {attempt + 1}, len={len(raw or '')})"
-                )
-            except Exception as e:
-                log.warning(f"[EVAL] {provider} evaluation failed (attempt {attempt + 1}): {e}")
-                break
-            await asyncio.sleep(0.4)
+                    parsed = extract_json(raw)
+                    if _has_scored_bands(parsed):
+                        parsed["_provider"] = provider
+                        _record_eval(
+                            provider=provider, model=DEEPSEEK_MODEL, ok=True,
+                            fallback=False, attempts=attempts_made, error="",
+                        )
+                        return parsed
+                    last_error = f"JSON invalid (len={len(raw or '')})"
+                    log.warning(f"[EVAL] deepseek {last_error}")
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {e}"
+                    log.warning(
+                        f"[EVAL] deepseek evaluation failed "
+                        f"(attempt {attempt + 1}): {last_error}"
+                    )
+                    break
+                await asyncio.sleep(0.4)
 
-    log.warning("[EVAL] all text evaluators unavailable — using local analysis")
+    log.warning(
+        f"[EVAL] all text evaluators unavailable — using local analysis "
+        f"(attempts={attempts_made}, last_error={last_error or 'none'})"
+    )
+    _record_eval(
+        provider="heuristic", model="", ok=False, fallback=True,
+        attempts=attempts_made, error=last_error or "no evaluator configured",
+    )
     return _heuristic_text_evaluation(answer)
 
 
