@@ -9,3 +9,4 @@ server.log
 server_err.log
 agent_*.log
 .netlify/
+local_server.log
