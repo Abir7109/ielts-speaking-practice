@@ -127,6 +127,27 @@ class TestReport(unittest.TestCase):
         self.assertEqual(len(report["corrections"]), 2)
         self.assertTrue(ex.finished)
 
+    def test_report_includes_criterion_explanations(self):
+        ex = Examiner("")
+        ex.start("part1")
+        ev = _fake_eval(6.0)
+        ev["evaluator"] = "heuristic"
+        ev["criterion_feedback"] = {
+            c: {"reason": f"{c} limited", "evidence": "quote", "next_step": f"fix {c}"}
+            for c in ("fluency_coherence", "lexical_resource",
+                      "grammatical_range", "pronunciation")
+        }
+        ex.record_answer("x", ev)
+        report = ex.build_report()
+        self.assertEqual(report["scoring_mode"], "estimate")
+        self.assertEqual(
+            set(report["criterion_feedback"].keys()),
+            {"fluency_coherence", "lexical_resource",
+             "grammatical_range", "pronunciation"},
+        )
+        self.assertTrue(report["criterion_feedback"]["fluency_coherence"]["reasons"])
+        self.assertTrue(report["weakest_reason"])
+
     def test_report_without_answers(self):
         ex = Examiner("")
         report = ex.build_report()

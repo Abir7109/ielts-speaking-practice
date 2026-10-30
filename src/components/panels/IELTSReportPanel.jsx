@@ -43,6 +43,7 @@ export default function IELTSReportPanel({ report, onRestart }) {
   const corrections = report.corrections || []
   const strengths = report.strengths || []
   const tips = report.top_tips || []
+  const critFeedback = report.criterion_feedback || {}
 
   return (
     <div style={{ padding: 20 }}>
@@ -76,34 +77,85 @@ export default function IELTSReportPanel({ report, onRestart }) {
         </div>
       </div>
 
-      <div style={{ ...label(), marginBottom: 8 }}>Criteria</div>
-      {CRITERIA.map(([name, key]) => (
-        <div key={key} style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '8px 12px',
-          marginBottom: 6,
-          background: 'rgba(255,255,255,0.03)',
-          border: '1px solid rgba(255,255,255,0.07)',
+      {report.scoring_mode === 'estimate' && (
+        <div style={{
+          padding: 10,
+          marginBottom: 14,
+          background: 'rgba(255, 170, 0, 0.08)',
+          border: '1px solid rgba(255, 170, 0, 0.25)',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          color: 'var(--soda-warning)',
+          lineHeight: 1.6,
         }}>
-          <span style={{
-            fontFamily: 'Space Grotesk, sans-serif',
-            fontSize: 12,
-            color: 'var(--soda-text)',
-          }}>
-            {name}
-          </span>
-          <span style={{
-            fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 16,
-            fontWeight: 700,
-            color: bandColor(crit[key] || 0),
-          }}>
-            {Number(crit[key] || 0).toFixed(1)}
-          </span>
+          AUTOMATED SCORING UNAVAILABLE — these bands are rough local estimates,
+          not examiner-level scores.
         </div>
-      ))}
+      )}
+
+      <div style={{ ...label(), marginBottom: 8 }}>Criteria</div>
+      {CRITERIA.map(([name, key]) => {
+        const fb = critFeedback[key] || {}
+        return (
+          <div key={key} style={{ marginBottom: 8 }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '8px 12px',
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.07)',
+            }}>
+              <span style={{
+                fontFamily: 'Space Grotesk, sans-serif',
+                fontSize: 12,
+                color: 'var(--soda-text)',
+              }}>
+                {name}
+              </span>
+              <span style={{
+                fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 16,
+                fontWeight: 700,
+                color: bandColor(crit[key] || 0),
+              }}>
+                {Number(crit[key] || 0).toFixed(1)}
+              </span>
+            </div>
+            {(fb.reasons?.length > 0 || fb.next_step) && (
+              <div style={{
+                padding: '8px 12px',
+                background: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                borderTop: 'none',
+              }}>
+                {(fb.reasons || []).map((r, i) => (
+                  <div key={i} style={{
+                    fontFamily: 'Space Grotesk, sans-serif',
+                    fontSize: 11,
+                    color: 'var(--soda-muted)',
+                    lineHeight: 1.5,
+                    marginBottom: 3,
+                  }}>
+                    {r}
+                  </div>
+                ))}
+                {fb.next_step && (
+                  <div style={{
+                    fontFamily: 'Space Grotesk, sans-serif',
+                    fontSize: 11,
+                    color: 'var(--soda-accent)',
+                    lineHeight: 1.5,
+                    marginTop: 3,
+                  }}>
+                    NEXT: {fb.next_step}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
 
       <div style={{ display: 'flex', gap: 8, margin: '14px 0' }}>
         {['1', '2', '3'].map(p => parts[p] !== undefined && (
@@ -138,6 +190,27 @@ export default function IELTSReportPanel({ report, onRestart }) {
           {report.weakest_criterion && (
             <> / Focus next: <span style={{ color: 'var(--soda-warning)' }}>{report.weakest_criterion}</span></>
           )}
+        </div>
+      )}
+
+      {report.weakest_reason && (
+        <div style={{
+          padding: 10,
+          marginBottom: 14,
+          background: 'rgba(255, 170, 0, 0.06)',
+          border: '1px solid rgba(255, 170, 0, 0.2)',
+        }}>
+          <div style={{ ...label(), color: 'var(--soda-warning)', marginBottom: 5 }}>
+            Why you lost marks
+          </div>
+          <div style={{
+            fontFamily: 'Space Grotesk, sans-serif',
+            fontSize: 12,
+            color: 'var(--soda-text)',
+            lineHeight: 1.55,
+          }}>
+            {report.weakest_reason}
+          </div>
         </div>
       )}
 

@@ -127,6 +127,16 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-30 | `netlify` **INCIDENT + FIX** | Netlify CLI walked up from `ielts-speaking-practice/` to SODA root `.netlify/state.json`, so early IELTS deploys overwrote **`soda-hud.netlify.app` (real SODA)** and `netlify link` repointed SODA's state to the IELTS site. Restored: rebuilt SODA `dist` + deployed to `soda-hud` (title "SODA Core Intelligence" verified), wrote SODA `.netlify/state.json` → `189b0c91-...`, wrote explicit `ielts-speaking-practice/.netlify/state.json` → `ab4b802e-...`; `netlify status` in each folder now reports the correct project | real SODA must stay untouched; IELTS must stay isolated | both URLs verified live with correct titles; `git ls-files` shows 0 IELTS files in SODA repo; SODA_BACKEND repo never pushed
 - 2026-10-30 | diagnosis (no file change) | Render IELTS backend connects to Gemini Live but API rejects with `1008: The Gemini API free tier is not available for this project`; local probe: `GEMINI_API_KEY` connects OK, `GOOGLE_API_KEY` fails 1008 (SDK prefers `GOOGLE_API_KEY` when both set) → Render key/project mismatch | unblocks voice on Render | probe printed only CONNECT OK/FAIL, no secrets
 - 2026-10-30 | verification (no file change) | user fixed Render `GEMINI_API_KEY`; live smoke: greeting audio 45 chunks + full examiner transcript ("Hello, welcome to IELTS speaking practice..."); `run_ielts_tool start_test(full)` → `test_state phase=answering part=1 kind=question q=1/3` | P7 final smoke | `smoke_live.js` EXIT=0; `smoke_tool.js` part1=true; user confirmed app running
+- 2026-10-30 | `backend/rubric.py` | replaced descriptors with official public Band 5-9 wording (FC/LR/GRA/P), added 25% weighting note + official half-band rounding example | user reported scores not matching official IELTS criteria | 44/44 tests OK
+- 2026-10-30 | `backend/prompts.py` | text-eval prompt v2: per-criterion `criterion_feedback` (reason/evidence/next_step), `why_band_summary`, official descriptors, STT-noise rule, output caps; examiner prompt now reads why-not-higher aloud; pronunciation prompt official 5-9 descriptors + STT-noise note | user reported no explanation for lost marks | probe shows Gemini returns reasons + evidence + next steps
+- 2026-10-30 | `backend/evaluation.py` | **scoring root-cause fix**: `DEEPSEEK_API_KEY` was empty → silent word-count heuristic. Gemini (`gemini-2.5-flash`, JSON mode, thinking off, 8192 tokens) is now primary text scorer; DeepSeek optional (`TEXT_EVAL_PROVIDER`); heuristic v2 analyses fillers/repetition/TTR/grammar patterns and returns per-criterion reasons; `evaluator` field added | real band scores without extra key; graceful, honest fallback | Gemini probe: evaluator=gemini, bands 7/6/7/6, criteria reasons present
+- 2026-10-30 | `backend/voice.py` | VAD: `END_SENSITIVITY_LOW`, `silence_duration_ms=2000`, `prefix_padding_ms=500` (was HIGH/800ms/300ms) | examiner was ending candidate turns on short thinking pauses | config accepted; live retest pending
+- 2026-10-30 | `backend/examiner.py` | spoken feedback now states band + main limit (weakest criterion reason) + top fix; report aggregates `criterion_feedback`, `weakest_reason`, `scoring_mode` (ai vs estimate) | user asked why marks were lost | tests 44/44 OK
+- 2026-10-30 | `backend/server.py` | `/status` exposes `eval` (gemini/deepseek/heuristic); startup log includes eval mode | make silent scorer degradation visible on Render | import + tests OK
+- 2026-10-30 | `backend/tests` | updated heuristic expectations; new tests: per-criterion explanations, Gemini routing, report criterion notes/scoring mode | regression coverage | 44/44 pass
+- 2026-10-30 | `src/components/panels/IELTSSpeakingPanel.jsx` | scores tab shows WHY/evidence/NEXT under each criterion; degraded banner when scoring is estimate-only; feedback tab shows why-band summary | user reported no explanation of scores | build OK
+- 2026-10-30 | `src/components/panels/IELTSReportPanel.jsx` | per-criterion explanation blocks, "Why you lost marks" (weakest_reason), estimate-mode banner | final report must explain lost marks | build OK
+- 2026-10-30 | `.env.example` | documented TEXT_EVAL_PROVIDER/TEXT_EVAL_MODEL; GEMINI now required for scoring; DeepSeek optional | prevent silent heuristic deployment | n/a
 - 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
 - 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
 - 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
@@ -150,8 +160,10 @@ Backend (Render, Docker python:3.11-slim)
 
 | Var | Where | Required | Purpose |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Render backend | yes | Gemini Live voice + pronunciation review |
-| `DEEPSEEK_API_KEY` | Render backend | yes* | text band evaluation (*heuristic fallback if missing) |
+| `GEMINI_API_KEY` | Render backend | yes | Gemini Live voice + band scoring + pronunciation review (billing-enabled key required) |
+| `TEXT_EVAL_PROVIDER` | Render backend | no | text scorer: `gemini` (default) or `deepseek` |
+| `TEXT_EVAL_MODEL` | Render backend | no | default `gemini-2.5-flash` |
+| `DEEPSEEK_API_KEY` | Render backend | no | optional alternative text evaluator (only when `TEXT_EVAL_PROVIDER=deepseek`) |
 | `SUPABASE_DB_URL` | Render backend | no | progress/history persistence (JSONL fallback) |
 | `PRONUNCIATION_MODEL` | Render backend | no | default `gemini-2.5-flash` |
 | `MAX_SESSIONS` | Render backend | no | default `5` |

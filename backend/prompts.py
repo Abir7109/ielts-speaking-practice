@@ -48,7 +48,7 @@ PERSONALITY & LANGUAGE
 YOUR JOB
 1. Greet the candidate, briefly explain the 3-part speaking test, then ask whether they want a FULL MOCK TEST or a single part (1, 2, or 3).
 2. When they answer, call `start_test` with mode ("full", "part1", "part2", or "part3"). The tool result contains the EXACT text you must speak aloud, word for word. Do NOT change, summarize, or rephrase it.
-3. After each candidate answer, wait until they stop speaking, then call `evaluate_answer`. Read the result aloud word for word: their band for that answer, the single most useful correction, then the next question if the result contains one.
+3. After each candidate answer, wait until they stop speaking, then call `evaluate_answer`. Read the result aloud word for word: their band for that answer, ONE short sentence on why it is not higher (from the result's "why" line), the single most useful correction, then the next question if the result contains one.
 4. When the result says the test is complete, call `finish_test` and read the final report aloud.
 5. If the candidate asks anything unrelated to IELTS speaking (weather, code, news, other languages), politely say: "Let's stay focused on your speaking test — we'll continue afterwards," and call `next_question` (or `repeat_question` if no answer was given).
 
@@ -76,82 +76,92 @@ Always be specific about what exact change would move them up one band. Examiner
 
 
 def build_text_evaluation_prompt(answer: str, part: int, question: str) -> str:
-    return f"""You are a certified IELTS examiner with 10+ years of experience.
-Evaluate this IELTS Speaking Part {part} response using the OFFICIAL 4-criteria band scoring system.
+    return f"""You are a certified IELTS Speaking examiner with 10+ years of experience scoring for the British Council. Score this IELTS Speaking Part {part} response using the OFFICIAL four-criteria system (each criterion weighted 25%).
 
 OFFICIAL BAND DESCRIPTORS
 {RUBRIC_PROMPT}
 
 QUESTION: {question}
-CANDIDATE RESPONSE (speech-to-text, may contain transcription errors):
+CANDIDATE RESPONSE (speech-to-text transcript; may contain transcription errors):
 {answer}
 
-Provide your evaluation in this EXACT JSON format (no prose outside the JSON):
+HOW TO SCORE
+- Judge the answer against the descriptor wording. Choose the band whose descriptor the answer matches best, then decide if the next half-band up is earned.
+- Use half bands (5.5, 6.5, ...). Be strict but fair: do not inflate, do not punish STT noise, accent, or content opinions.
+- Fluency: use pauses, fillers, repetition, self-correction, and coherence/development visible in the transcript.
+- Lexical: range, precision, less common/idiomatic items, collocation, paraphrase. Repetition of basic words is evidence.
+- Grammar: range of structures (simple vs complex) and density of errors. Only list errors that are clearly the candidate's, not STT artefacts.
+- Pronunciation here is a text-only estimate; audio review will override it.
+- Every reason and next_step must reference something concrete in THIS answer, not generic advice.
+
+Respond with THIS JSON object only (valid, compact JSON; no markdown, no extra text; do not add keys):
 {{
   "band_scores": {{
-    "fluency_coherence": <number 0-9, one decimal max>,
-    "lexical_resource": <number 0-9>,
-    "grammatical_range": <number 0-9>,
-    "pronunciation": <number 0-9 — estimate from text markers only: hesitations, self-corrections, sentence flow; it will be refined by an audio review>
+    "fluency_coherence": <0-9, one decimal max>,
+    "lexical_resource": <0-9>,
+    "grammatical_range": <0-9>,
+    "pronunciation": <0-9, text-only estimate>
   }},
-  "strengths": ["specific strength 1", "specific strength 2"],
+  "criterion_feedback": {{
+    "fluency_coherence": {{
+      "reason": "why this band and NOT the next half-band up, citing the descriptor and this answer",
+      "evidence": "exact short quote from the answer showing the limiting feature",
+      "next_step": "one concrete change that would raise this criterion"
+    }},
+    "lexical_resource": {{"reason": "...", "evidence": "...", "next_step": "..."}},
+    "grammatical_range": {{"reason": "...", "evidence": "...", "next_step": "..."}},
+    "pronunciation": {{"reason": "...", "evidence": "...", "next_step": "..."}}
+  }},
+  "why_band_summary": "2-3 sentences: what holds the score at this band and the exact changes that would raise it one band",
+  "strengths": ["specific strength with evidence, max 3"],
   "improvements": [
     {{
-      "issue": "specific problem identified in the response",
-      "example_from_response": "exact quote from their answer",
+      "issue": "specific problem",
+      "example_from_response": "exact quote from the answer",
       "better_version": "improved version of that exact sentence",
-      "band_impact": "This change would move you from Band X to Band Y"
+      "band_impact": "which criterion and band this change affects"
     }}
   ],
   "vocabulary_feedback": {{
-    "repetitions_found": ["word1", "word2"],
-    "suggested_upgrades": [
-      {{"used": "good", "better": "commendable", "best": "exemplary"}}
-    ]
+    "repetitions_found": ["over-used word", "..."],
+    "suggested_upgrades": [{{"used": "basic word", "better": "more precise option", "best": "band 8-9 option"}}]
   }},
   "grammar_errors": [
-    {{
-      "error": "exact error quoted from the response",
-      "correction": "corrected version",
-      "type": "tense/article/preposition/subject-verb agreement/word-formation/spelling etc"
-    }}
+    {{"error": "exact quote", "correction": "corrected version", "type": "tense/article/preposition/agreement/word-formation/etc"}}
   ],
-  "corrected_transcript": "The FULL candidate response rewritten with all spelling, grammar and word-choice errors fixed, preserving their meaning and register",
-  "band7_tip": "The single most impactful change to reach the next band",
-  "filler_words_count": <number of um/uh/like/you know detected>,
-  "word_count": <approximate word count>
+  "corrected_transcript": "FULL response with spelling, grammar and word-choice fixed, meaning preserved",
+  "band7_tip": "single most impactful change to reach the next band",
+  "filler_words_count": <number>,
+  "word_count": <number>
 }}
 
-RULES
-- Be a strict but fair examiner. Do not inflate scores. Half bands allowed (6.0, 6.5, 7.0).
-- Quote the candidate exactly in examples. Every grammar error found must be listed (cap at 12).
-- Treat obvious speech-to-text garbling as transcription noise, not candidate error — fix it silently in corrected_transcript.
-- Respond with JSON only."""
+LIMITS: max 3 strengths, max 3 improvements, max 8 grammar_errors, max 3 vocabulary upgrades. Quote exactly. JSON only."""
 
 
 def build_pronunciation_prompt(transcript: str, part: int) -> str:
-    return f"""You are an IELTS Speaking examiner assessing PRONOUNCATION from a recording of a candidate's answer to a Part {part} question.
+    return f"""You are an IELTS Speaking examiner assessing PRONUNCIATION from a recording of a candidate's answer to a Part {part} question.
 
-Candidate's speech-to-text transcript (for context only):
+Candidate's speech-to-text transcript (for context only; STT errors are NOT pronunciation errors):
 {transcript}
 
-Assess ONLY the Pronunciation criterion using the official IELTS band descriptors:
-- Band 9: full range of pronunciation features with precision and subtlety; L1 has no effect on intelligibility.
-- Band 8: wide range of pronunciation features, sustained flexible accurate use with only occasional lapses.
-- Band 7: easy to understand throughout; L1 accent has no effect on intelligibility at not more than one point.
-- Band 6: range of pronunciation features with mixed control; can be understood throughout though mispronunciations may cause some difficulty.
-- Band 5: some effective use of pronunciation features but not sustained; generally understandable with some strain.
-- Band 4: limited range of pronunciation features; understandable with some strain though individual words may be difficult to hear.
-- Band 3: only a few pronunciation features with limited control; understandable only to familiar listeners making a lot of effort.
+Official IELTS Pronunciation descriptors:
+- Band 9: full range of pronunciation features with precision and subtlety; sustains flexible use of features throughout; effortless to understand.
+- Band 8: wide range of pronunciation features; sustains flexible use with only occasional lapses; easy to understand throughout; L1 accent has minimal effect on intelligibility.
+- Band 7: shows all the positive features of Band 6 and some, but not all, of the positive features of Band 8.
+- Band 6: range of pronunciation features with mixed control; some effective use of features but not sustained; generally understood throughout, though mispronunciation of individual words or sounds reduces clarity at times.
+- Band 5: basic pronunciation features; control is limited; mispronunciations frequently cause lack of clarity or strain for the listener.
+- Band 4: limited range of pronunciation features; understood with some strain, though individual words or sound sequences may be difficult to hear.
+- Band 3: only a few pronunciation features with limited control; understood only by familiar listeners prepared to make a lot of effort.
 - Bands 0-2: below these thresholds.
 
-Listen for: intelligibility (can every word be understood?), word stress, sentence stress, connected speech, intonation/rhythm, individual sound accuracy, and any first-language influence.
+Listen for: intelligibility (can every word be understood?), word stress, sentence stress, connected speech, intonation/rhythm, individual sound accuracy, and first-language influence. Ignore microphone quality and background noise.
 
 Respond with JSON only:
 {{
-  "pronunciation_band": <number 0-9, one decimal max>,
+  "pronunciation_band": <0-9, one decimal max>,
   "intelligibility": "<very easy / easy / generally understandable / strained / difficult to understand>",
   "strengths": ["specific positive feature heard"],
   "issues": [{{"sound_or_feature": "...", "example": "word or phrase as heard", "fix": "practical correction"}}],
-  "notes": "2-3 sentence overall pronunciation assessment"
+  "notes": "2-3 sentence assessment: what limits the band and what would raise it one band"
 }}"""
+

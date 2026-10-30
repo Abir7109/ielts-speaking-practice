@@ -212,7 +212,12 @@ export default function IELTSSpeakingPanel({ data }) {
 
   const { band_scores, overall_band, strengths, improvements,
           vocabulary_feedback, grammar_errors, corrected_transcript,
-          pronunciation_detail, band7_tip, filler_words_count } = data
+          pronunciation_detail, band7_tip, filler_words_count,
+          criterion_feedback, why_band_summary, degraded, evaluator } = data
+
+  const estimated = evaluator === 'heuristic'
+    || (Array.isArray(degraded) && degraded.includes('text-evaluator-unavailable'))
+  const critFeedback = criterion_feedback || {}
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -255,6 +260,20 @@ export default function IELTSSpeakingPanel({ data }) {
         </div>
       </div>
 
+      {estimated && (
+        <div style={{
+          padding: '8px 20px',
+          background: 'rgba(255, 170, 0, 0.08)',
+          borderBottom: '1px solid rgba(255, 170, 0, 0.25)',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10, color: 'var(--soda-warning)',
+          lineHeight: 1.6, letterSpacing: '0.04em'
+        }}>
+          AUTOMATED SCORING UNAVAILABLE — these bands are rough local estimates.
+          Configure GEMINI_API_KEY on the server for real examiner scoring.
+        </div>
+      )}
+
       <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         {['scores', 'feedback', 'grammar', 'vocab'].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
@@ -277,34 +296,74 @@ export default function IELTSSpeakingPanel({ data }) {
         {tab === 'scores' && band_scores && (
           <div>
             {[
-              ['Fluency & Coherence', band_scores.fluency_coherence],
-              ['Lexical Resource', band_scores.lexical_resource],
-              ['Grammatical Range', band_scores.grammatical_range],
-              ['Pronunciation', band_scores.pronunciation]
-            ].map(([label, score]) => {
+              ['Fluency & Coherence', band_scores.fluency_coherence, 'fluency_coherence'],
+              ['Lexical Resource', band_scores.lexical_resource, 'lexical_resource'],
+              ['Grammatical Range', band_scores.grammatical_range, 'grammatical_range'],
+              ['Pronunciation', band_scores.pronunciation, 'pronunciation']
+            ].map(([label, score, key]) => {
               const color = score >= 7 ? 'var(--soda-success)' :
                            score >= 6 ? 'var(--soda-accent)' :
                            score >= 5 ? 'var(--soda-warning)' : 'var(--soda-error)'
+              const fb = critFeedback[key] || {}
               return (
-                <div key={label} style={{
-                  display: 'flex', justifyContent: 'space-between',
-                  alignItems: 'center', padding: '10px 12px',
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.07)',
-                  marginBottom: 6
-                }}>
-                  <span style={{
-                    fontFamily: 'Space Grotesk, sans-serif',
-                    fontSize: 12, color: 'var(--soda-muted)'
+                <div key={key} style={{ marginBottom: 10 }}>
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    alignItems: 'center', padding: '10px 12px',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.07)'
                   }}>
-                    {label}
-                  </span>
-                  <span style={{
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontSize: 18, fontWeight: 700, color
-                  }}>
-                    {score}
-                  </span>
+                    <span style={{
+                      fontFamily: 'Space Grotesk, sans-serif',
+                      fontSize: 12, color: 'var(--soda-muted)'
+                    }}>
+                      {label}
+                    </span>
+                    <span style={{
+                      fontFamily: 'JetBrains Mono, monospace',
+                      fontSize: 18, fontWeight: 700, color
+                    }}>
+                      {score}
+                    </span>
+                  </div>
+                  {(fb.reason || fb.next_step) && (
+                    <div style={{
+                      padding: '8px 12px',
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      borderTop: 'none'
+                    }}>
+                      {fb.reason && (
+                        <div style={{
+                          fontFamily: 'Space Grotesk, sans-serif',
+                          fontSize: 11, color: 'var(--soda-text)',
+                          lineHeight: 1.5, marginBottom: 4
+                        }}>
+                          <span style={{ color: 'var(--soda-warning)' }}>WHY: </span>
+                          {fb.reason}
+                        </div>
+                      )}
+                      {fb.evidence && (
+                        <div style={{
+                          fontFamily: 'JetBrains Mono, monospace',
+                          fontSize: 10, color: 'var(--soda-muted)',
+                          fontStyle: 'italic', marginBottom: 4
+                        }}>
+                          "{fb.evidence}"
+                        </div>
+                      )}
+                      {fb.next_step && (
+                        <div style={{
+                          fontFamily: 'Space Grotesk, sans-serif',
+                          fontSize: 11, color: 'var(--soda-accent)',
+                          lineHeight: 1.5
+                        }}>
+                          <span style={{ letterSpacing: '0.08em' }}>NEXT: </span>
+                          {fb.next_step}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -374,6 +433,29 @@ export default function IELTSSpeakingPanel({ data }) {
 
         {tab === 'feedback' && (
           <div>
+            {why_band_summary && (
+              <div style={{
+                background: 'rgba(0, 240, 255, 0.04)',
+                border: '1px solid rgba(0, 240, 255, 0.18)',
+                padding: 10, marginBottom: 14
+              }}>
+                <div style={{
+                  fontFamily: 'Space Grotesk, sans-serif',
+                  fontSize: 10, color: 'var(--soda-accent)',
+                  letterSpacing: '0.1em', textTransform: 'uppercase',
+                  marginBottom: 5
+                }}>
+                  Why this band
+                </div>
+                <div style={{
+                  fontFamily: 'Space Grotesk, sans-serif',
+                  fontSize: 12, color: 'var(--soda-text)',
+                  lineHeight: 1.55
+                }}>
+                  {why_band_summary}
+                </div>
+              </div>
+            )}
             {strengths?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <div style={{

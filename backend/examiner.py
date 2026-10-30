@@ -198,17 +198,27 @@ class Examiner:
         )
 
     def spoken_feedback(self, evaluation: dict) -> str:
-        """Band + top correction only. The caller appends the next script."""
+        """Band + why it is not higher + top correction. Caller appends next script."""
         band = evaluation.get("overall_band", "?")
+        scores = evaluation.get("band_scores") or {}
+        crit_fb = evaluation.get("criterion_feedback") or {}
+        speech = f"Your band for that answer is {band}."
+
+        if scores and crit_fb:
+            weakest = min(scores, key=lambda c: scores[c])
+            reason = (crit_fb.get(weakest) or {}).get("reason") or ""
+            label = CRITERIA_LABELS.get(weakest, "one criterion")
+            if reason:
+                speech += f" The main limit is {label}: {reason}"
+
         tip = ""
         imps = evaluation.get("improvements") or []
         if imps and isinstance(imps[0], dict):
             tip = imps[0].get("better_version") or imps[0].get("issue") or ""
         elif imps and isinstance(imps[0], str):
             tip = imps[0]
-        speech = f"Your band for that answer is {band}."
         if tip:
-            speech += f" Focus on this: {tip}"
+            speech += f" Top fix: {tip}"
         return speech
 
     def spoken_repeat(self) -> str:
@@ -243,15 +253,39 @@ class Examiner:
         corrections = []
         strengths = []
         tips = []
+        est_reasons: dict[str, list[str]] = {c: [] for c in CRITERIA}
+        est_next: dict[str, str] = {c: "" for c in CRITERIA}
+        scoring_modes = set()
         for a in self.answers:
             ev = a["evaluation"]
             corrections.extend(ev.get("grammar_errors") or [])
             strengths.extend(ev.get("strengths") or [])
             if ev.get("band7_tip"):
                 tips.append(ev["band7_tip"])
+            if ev.get("evaluator"):
+                scoring_modes.add(str(ev["evaluator"]))
+            cf = ev.get("criterion_feedback") or {}
+            for crit in CRITERIA:
+                item = cf.get(crit) or {}
+                reason = str(item.get("reason") or "").strip()
+                if reason and reason not in est_reasons[crit]:
+                    est_reasons[crit].append(reason)
+                if not est_next[crit] and item.get("next_step"):
+                    est_next[crit] = str(item["next_step"]).strip()
 
         weakest = min(crit_scores, key=lambda c: crit_scores[c]) if self.answers else None
         strongest = max(crit_scores, key=lambda c: crit_scores[c]) if self.answers else None
+
+        criterion_feedback = {
+            crit: {
+                "reasons": est_reasons[crit][:2],
+                "next_step": est_next[crit],
+            }
+            for crit in CRITERIA
+        }
+        weakest_reason = (
+            (est_reasons.get(weakest) or [""])[0] if weakest else ""
+        )
 
         report = {
             "mode": self.mode,
@@ -262,6 +296,11 @@ class Examiner:
             "corrections": corrections[:20],
             "strengths": strengths[:8],
             "top_tips": tips[:5],
+            "criterion_feedback": criterion_feedback,
+            "weakest_reason": weakest_reason,
+            "scoring_mode": (
+                "estimate" if "heuristic" in scoring_modes else "ai"
+            ),
             "weakest_criterion": CRITERIA_LABELS.get(weakest, "") if weakest else "",
             "strongest_criterion": CRITERIA_LABELS.get(strongest, "") if strongest else "",
             "disclaimer": "AI-estimated practice score — not an official IELTS result.",

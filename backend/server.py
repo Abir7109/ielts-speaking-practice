@@ -28,6 +28,7 @@ _backend_dir = os.path.dirname(os.path.abspath(__file__))
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
+import evaluation
 import store
 from logger import log
 from voice import VoiceSession
@@ -70,7 +71,8 @@ async def lifespan(app):
         log.warning(f"[STARTUP] store init failed: {e}")
     log.info(
         f"[STARTUP] ready — db={'supabase' if ok else 'jsonl fallback'}, "
-        f"max_sessions={MAX_SESSIONS}, model={os.getenv('LIVE_MODEL', 'default')}"
+        f"max_sessions={MAX_SESSIONS}, model={os.getenv('LIVE_MODEL', 'default')}, "
+        f"eval={evaluation.eval_mode()}"
     )
     yield
     for s in list(sessions.values()):
@@ -100,6 +102,7 @@ async def status():
         "sessions": len(_live_sessions()),
         "max_sessions": MAX_SESSIONS,
         "db": store.db_active(),
+        "eval": evaluation.eval_mode(),
         "time": time.time(),
     }
 

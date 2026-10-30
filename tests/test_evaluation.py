@@ -46,12 +46,30 @@ class TestHeuristics(unittest.TestCase):
         result = evaluation._heuristic_text_evaluation("I like tea.")
         self.assertEqual(result["band_scores"]["fluency_coherence"], 4.0)
         self.assertIn("_degraded", result)
+        self.assertEqual(result["_provider"], "heuristic")
 
     def test_long_answer_scored_higher(self):
         answer = " ".join(["word"] * 120)
         result = evaluation._heuristic_text_evaluation(answer)
         self.assertEqual(result["band_scores"]["fluency_coherence"], 6.0)
         self.assertEqual(result["word_count"], 120)
+
+    def test_heuristic_explains_every_criterion(self):
+        answer = (
+            "I really like cooking because it is relaxing. For example, last Sunday "
+            "I made pasta for my family and everybody enjoyed it, although I am not "
+            "a professional cook. In the future I want to learn more recipes."
+        )
+        result = evaluation._heuristic_text_evaluation(answer)
+        for crit in rubric.CRITERIA:
+            fb = result["criterion_feedback"][crit]
+            self.assertTrue(fb["reason"], f"missing reason for {crit}")
+            self.assertTrue(fb["next_step"], f"missing next_step for {crit}")
+        self.assertTrue(result["why_band_summary"])
+        self.assertNotEqual(
+            result["criterion_feedback"]["fluency_coherence"]["reason"],
+            result["criterion_feedback"]["lexical_resource"]["reason"],
+        )
 
     def test_pronunciation_heuristic_flag(self):
         result = evaluation._heuristic_pronunciation()
@@ -74,6 +92,9 @@ class TestEvaluateAnswerOffline(unittest.TestCase):
         self.assertLessEqual(ev["overall_band"], 9.0)
         self.assertIn("text-evaluator-unavailable", ev["degraded"])
         self.assertIn("audio-unavailable", ev["degraded"])
+        self.assertEqual(ev["evaluator"], "heuristic")
+        self.assertEqual(set(ev["criterion_feedback"].keys()), set(rubric.CRITERIA))
+        self.assertTrue(ev["why_band_summary"])
         self.assertEqual(ev["part"], 1)
         self.assertEqual(ev["question"], "Do you like reading?")
         self.assertTrue(ev["corrected_transcript"])
@@ -85,6 +106,32 @@ class TestEvaluateAnswerOffline(unittest.TestCase):
             )
         # < 2s audio -> heuristic pronunciation, pronunciation score from text
         self.assertEqual(ev["pronunciation_detail"]["intelligibility"], "unknown")
+
+
+class TestTextEvaluatorRouting(unittest.TestCase):
+    def test_gemini_used_when_key_configured(self):
+        payload = (
+            '{"band_scores": {"fluency_coherence": 6.5, "lexical_resource": 6.5, '
+            '"grammatical_range": 6.0, "pronunciation": 6.5}, '
+            '"criterion_feedback": {}, "why_band_summary": "test", '
+            '"strengths": [], "improvements": [], "grammar_errors": [], '
+            '"band7_tip": "t", "filler_words_count": 0, "word_count": 10}'
+        )
+
+        async def fake_gemini(prompt):
+            return payload
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "DEEPSEEK_API_KEY": ""}), \
+                patch.object(evaluation, "_gemini_json", side_effect=fake_gemini):
+            ev = asyncio.run(
+                evaluation.evaluate_answer(
+                    "I enjoy reading books because they help me relax.",
+                    b"", 1, "Do you like reading?",
+                )
+            )
+        self.assertEqual(ev["evaluator"], "gemini")
+        self.assertEqual(ev["band_scores"]["fluency_coherence"], 6.5)
+        self.assertNotIn("text-evaluator-unavailable", ev.get("degraded", []))
 
 
 if __name__ == "__main__":

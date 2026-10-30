@@ -243,10 +243,13 @@ class VoiceSession:
                 input_audio_transcription={},
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
+                        # IELTS answers include thinking pauses — do not end the
+                        # candidate's turn on a short gap. 2s of silence is the
+                        # documented maximum and low sensitivity ignores breaths.
                         start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
-                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                        prefix_padding_ms=300,
-                        silence_duration_ms=800,
+                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                        prefix_padding_ms=500,
+                        silence_duration_ms=2000,
                     )
                 ),
                 speech_config=types.SpeechConfig(
