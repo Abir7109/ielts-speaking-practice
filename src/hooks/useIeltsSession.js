@@ -51,11 +51,11 @@ export default function useIeltsSession() {
   const mic = useBrowserMic(socket)
 
   useEffect(() => {
-    const pushTranscript = (sender, text) => {
+    const pushTranscript = (sender, text, final = false) => {
       if (!text) return
       setTranscript(prev => {
         const last = prev[prev.length - 1]
-        if (last && last.sender === sender) {
+        if (!final && last && last.sender === sender && !last.final) {
           const merged = prev.slice()
           merged[merged.length - 1] = { ...last, text: last.text + text }
           return merged
@@ -64,6 +64,7 @@ export default function useIeltsSession() {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           sender,
           text,
+          final,
         }]
         return next.length > 300 ? next.slice(next.length - 300) : next
       })
@@ -102,7 +103,7 @@ export default function useIeltsSession() {
     }
 
     const onTranscription = (data) => {
-      pushTranscript(data?.sender || 'Candidate', data?.text || '')
+      pushTranscript(data?.sender || 'Candidate', data?.text || '', Boolean(data?.final))
     }
 
     const onTestState = (data) => {

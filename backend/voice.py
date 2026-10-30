@@ -38,6 +38,7 @@ MAX_ANSWER_BYTES = SEND_SAMPLE_RATE * 2 * MAX_ANSWER_SECONDS
 MIN_ANSWER_AUDIO_BYTES = SEND_SAMPLE_RATE * 2  # 1s — below this is "no answer"
 EVAL_LIMIT_PER_HOUR = 30
 MAX_RETRIES = 10
+SPEECH_TOOLS = {"start_test", "evaluate_answer", "next_question", "repeat_question", "finish_test"}
 
 _GEMINI_CLIENT = None
 
@@ -78,6 +79,7 @@ class VoiceSession:
         self._processed_fc_ids: set = set()
         self._last_input_transcription = ""
         self._last_output_transcription = ""
+        self._script_transcript_active = False
 
         # candidate answer capture (owned by backend, never model-supplied)
         self._answer_text = ""
@@ -454,7 +456,7 @@ class VoiceSession:
                             if delta:
                                 await self._emit("transcription", {"sender": "Candidate", "text": delta})
 
-                        if response.server_content.output_transcription:
+                        if response.server_content.output_transcription and not self._script_transcript_active:
                             transcript = response.server_content.output_transcription.text
                             if transcript and transcript != self._last_output_transcription:
                                 delta = transcript
@@ -463,6 +465,10 @@ class VoiceSession:
                                 self._last_output_transcription = transcript
                                 if delta:
                                     await self._emit("transcription", {"sender": "Examiner", "text": delta})
+
+                        if response.server_content.turn_complete:
+                            self._script_transcript_active = False
+                            self._last_output_transcription = ""
 
                     if response.tool_call:
                         function_responses = []
@@ -506,6 +512,20 @@ class VoiceSession:
                                 function_responses.append(result)
 
                         if function_responses:
+                            script_text = " ".join(
+                                str(fr.response.get("result") or "").strip()
+                                for fc, fr in zip(pending_fcs, function_responses)
+                                if fc.name in SPEECH_TOOLS
+                                and isinstance(fr.response, dict)
+                                and fr.response.get("success")
+                                and str(fr.response.get("result") or "").strip()
+                            ).strip()
+                            if script_text:
+                                await self._emit("transcription", {
+                                    "sender": "Examiner", "text": script_text, "final": True,
+                                })
+                                self._script_transcript_active = True
+                                self._last_output_transcription = ""
                             try:
                                 await asyncio.wait_for(
                                     self.session.send_tool_response(function_responses=function_responses),

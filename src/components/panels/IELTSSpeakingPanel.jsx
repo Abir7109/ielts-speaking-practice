@@ -258,6 +258,18 @@ export default function IELTSSpeakingPanel({ data }) {
             </span>
           )}
         </div>
+        <div style={{
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 9,
+          color: estimated ? 'var(--soda-warning)' : 'var(--soda-success)',
+          letterSpacing: '0.08em',
+          marginTop: 6,
+          textAlign: 'right',
+        }}>
+          {estimated
+            ? 'LOCAL ESTIMATE — AI SCORER OFFLINE'
+            : `SCORED BY ${String(evaluator || 'gemini').toUpperCase()}`}
+        </div>
       </div>
 
       {estimated && (
