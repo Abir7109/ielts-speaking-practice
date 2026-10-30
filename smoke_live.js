@@ -1,5 +1,6 @@
 const { io } = require("socket.io-client");
-const s = io("https://ielts-speaking-practice.onrender.com", { transports: ["polling","websocket"], timeout: 60000, reconnection: false, extraHeaders: { Origin: "https://ielts-speaking-practice-815.netlify.app" } });
+const s = io("https://ielts-speaking-practice.onrender.com", { transports: ["polling","websocket"], timeout: 60000, reconnection: false, extraHeaders: { Origin: process.env.ORIGIN || "https://soda-ielts.netlify.app" } });
+
 let chunks = 0, bytes = 0, words = [];
 const t0 = Date.now(); const ts = () => "[" + ((Date.now()-t0)/1000).toFixed(1) + "s] ";
 const finish = (m) => { console.log(ts() + "RESULT: " + m + " | chunks=" + chunks + " bytes=" + bytes + " | examiner_said=" + JSON.stringify(words.join(" ").trim())); s.emit("stop_audio"); s.close(); process.exit(chunks > 0 ? 0 : 1); };

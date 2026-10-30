@@ -1,5 +1,5 @@
 const { io } = require("socket.io-client");
-const s = io("https://ielts-speaking-practice.onrender.com", { transports: ["polling","websocket"], timeout: 60000, reconnection: false, extraHeaders: { Origin: "https://ielts-speaking-practice-815.netlify.app" } });
+const s = io("https://ielts-speaking-practice.onrender.com", { transports: ["polling","websocket"], timeout: 60000, reconnection: false, extraHeaders: { Origin: process.env.ORIGIN || "https://soda-ielts.netlify.app" } });
 let started = false, part1 = false, examiner = [];
 const t0 = Date.now(); const ts = () => "[" + ((Date.now()-t0)/1000).toFixed(1) + "s] ";
 s.on("connect", () => { console.log(ts() + "CONNECTED"); s.emit("start_audio", { client_id: "smoke-tool" }); });
