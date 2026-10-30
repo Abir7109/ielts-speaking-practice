@@ -107,7 +107,8 @@ Backend (Render, Docker python:3.11-slim)
 - [x] **P4 Persistence** — store.py Supabase + fallback, progress in prompt, tests green
 - [x] **P5 Frontend** — App rewrite, lean session hook, panels (question/feedback/progress/report), prep countdown, build green
 - [x] **P6 Verification** — `npm run build` ✓, `compileall` OK, 37/37 tests OK, `/status` smoke OK (db=supabase)
-- [x] **P7 Deploy** — repo pushed to GitHub; Render pending (user sets GEMINI_API_KEY/DEEPSEEK_API_KEY/SUPABASE_DB_URL/CORS_ORIGINS in dashboard); **Netlify live**: https://ielts-speaking-practice-815.netlify.app (site `ielts-speaking-practice-815`, linked to this folder, `VITE_BACKEND_URL` build env = placeholder `https://ielts-speaking-practice.onrender.com` — update to real Render URL after backend deploy, then redeploy Netlify)
+- [x] **P7 Deploy** — GitHub repo pushed; Render backend URL `https://ielts-speaking-practice.onrender.com` (user-provided); **Netlify live**: https://ielts-speaking-practice-815.netlify.app (site `ielts-speaking-practice-815`, linked to this folder, `VITE_BACKEND_URL` = Render URL)
+- [ ] **Final smoke** — open Netlify URL → Start Practice → mic grant → answer → evaluation panel → final report (ensure Render CORS_ORIGINS includes `https://ielts-speaking-practice-815.netlify.app`)
 
 ---
 
