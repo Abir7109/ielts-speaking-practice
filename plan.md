@@ -137,6 +137,7 @@ Backend (Render, Docker python:3.11-slim)
 - 2026-10-30 | `src/components/panels/IELTSSpeakingPanel.jsx` | scores tab shows WHY/evidence/NEXT under each criterion; degraded banner when scoring is estimate-only; feedback tab shows why-band summary | user reported no explanation of scores | build OK
 - 2026-10-30 | `src/components/panels/IELTSReportPanel.jsx` | per-criterion explanation blocks, "Why you lost marks" (weakest_reason), estimate-mode banner | final report must explain lost marks | build OK
 - 2026-10-30 | `.env.example` | documented TEXT_EVAL_PROVIDER/TEXT_EVAL_MODEL; GEMINI now required for scoring; DeepSeek optional | prevent silent heuristic deployment | n/a
+- 2026-10-30 | deploy verification | commit `f4a6a5d` pushed → Render redeployed; `/status` reports `eval:"gemini"`; Netlify site `ielts-speaking-practice-815` redeployed; live smoke: greeting 55 audio chunks + full transcript, `start_test(full)` → Part 1 Q1 spoken | confirm fixes on production | `smoke_live.js` and `smoke_tool.js` EXIT=0
 - 2026-10-29 | `ielts-speaking-practice/.git` | `git init` — own independent repo | P0 (nested repo, ignored by SODA) | `git status` shows 11 untracked entries
 - 2026-10-29 | `../.gitignore` (SODA root) | appended `ielts-speaking-practice/` | keep SODA repo clean of the sub-project | file edit applied; only SODA change in this whole project
 - 2026-10-29 | `ielts-speaking-practice/node_modules` | `npm install` — 165 packages | deps for copied UI | install exited 0
