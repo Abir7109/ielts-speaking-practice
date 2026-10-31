@@ -172,7 +172,7 @@ export default function IELTSDashboardPanel({ data }) {
       </div>
 
       <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))',
         gap: 8, marginBottom: 20
       }}>
         {[

@@ -17,15 +17,28 @@ const TABS = [
   ['report', 'Report'],
 ]
 
-function useOrbSize() {
-  const compute = () => Math.min(420, Math.max(220, Math.round(window.innerWidth * 0.36)))
-  const [size, setSize] = useState(compute)
+function useViewport() {
+  const read = () => ({ w: window.innerWidth, h: window.innerHeight })
+  const [vp, setVp] = useState(read)
   useEffect(() => {
-    const onResize = () => setSize(compute())
+    const onResize = () => setVp(read())
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
   }, [])
-  return size
+  return vp
+}
+
+// Constrained by width AND height: a phone held in landscape has ~360px of vertical
+// space, and a 220px orb there pushes Start/Stop off the screen.
+function orbSizeFor(w, h, isPhone) {
+  return Math.round(Math.max(
+    150,
+    Math.min(isPhone ? 400 : 420, Math.min(w * (isPhone ? 0.46 : 0.36), h * 0.32)),
+  ))
 }
 
 function PrepChip({ prepEndsAt }) {
@@ -160,7 +173,9 @@ function TranscriptView({ transcript }) {
 
 export default function App() {
   const session = useIeltsSession()
-  const orbSize = useOrbSize()
+  const { w: viewportW, h: viewportH } = useViewport()
+  const isPhone = viewportW <= 768
+  const orbSize = orbSizeFor(viewportW, viewportH, isPhone)
 
   const {
     connected, active, phase, test, latestEvaluation, report, progress,
@@ -169,6 +184,8 @@ export default function App() {
     start, stop, setRightOpen, setRightTab, setTranscriptOpen,
     showProgress, endTest, clearError,
   } = session
+
+  const sheetOpen = rightOpen || transcriptOpen
 
   const dashboardData = useMemo(() => {
     if (!progress) return null
@@ -198,7 +215,7 @@ export default function App() {
     : !active
       ? 'STANDBY'
       : speaking === 'model'
-        ? 'EXAMINER SPEAKING'
+        ? (isPhone ? 'SPEAKING' : 'EXAMINER SPEAKING')
         : phase === 'evaluating' || activeTool
           ? 'SCORING'
           : micActive && speaking === 'user'
@@ -215,27 +232,58 @@ export default function App() {
           ? 'var(--soda-success)'
           : 'var(--soda-muted)'
 
+  const actionBtn = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: isPhone ? 6 : 8,
+    minHeight: 48,
+    flex: isPhone ? '1 1 auto' : undefined,
+    padding: isPhone ? '0 14px' : '12px 18px',
+    fontFamily: GROTESK,
+    fontSize: isPhone ? 10 : 11,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+  }
+
+  const headerBtn = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minWidth: isPhone ? 44 : undefined,
+    minHeight: isPhone ? 44 : 32,
+    padding: isPhone ? '0 12px' : '6px 10px',
+    border: '1px solid rgba(255,255,255,0.1)',
+    fontFamily: GROTESK,
+    fontSize: 10,
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+  }
+
   const restart = () => {
     stop()
     start()
   }
 
   return (
-    <div style={{
-      minHeight: '100vh',
+    <div className="app-shell" style={{
       background: '#04080B',
       color: 'var(--soda-text)',
       display: 'flex',
       flexDirection: 'column',
       position: 'relative',
-      overflow: 'hidden',
     }}>
       <header style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
-        padding: '12px 20px',
+        flexWrap: 'wrap',
+        gap: isPhone ? 8 : 12,
+        padding: isPhone ? '8px 12px' : '12px 20px',
+        paddingTop: `max(${isPhone ? 8 : 12}px, env(safe-area-inset-top))`,
         borderBottom: '1px solid rgba(255,255,255,0.06)',
         background: 'rgba(4, 8, 11, 0.85)',
         zIndex: 30,
@@ -243,23 +291,25 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <span style={{
             fontFamily: MONO,
-            fontSize: 12,
+            fontSize: isPhone ? 11 : 12,
             letterSpacing: '0.18em',
             color: 'var(--soda-accent)',
           }}>
             IELTS // SPEAKING
           </span>
-          <span style={{
-            fontFamily: GROTESK,
-            fontSize: 10,
-            letterSpacing: '0.1em',
-            color: 'var(--soda-muted)',
-          }}>
-            AI EXAMINER
-          </span>
+          {!isPhone && (
+            <span style={{
+              fontFamily: GROTESK,
+              fontSize: 10,
+              letterSpacing: '0.1em',
+              color: 'var(--soda-muted)',
+            }}>
+              AI EXAMINER
+            </span>
+          )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isPhone ? 6 : 10 }}>
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -286,47 +336,31 @@ export default function App() {
           <button
             onClick={() => setTranscriptOpen(v => !v)}
             title="Transcript"
+            aria-label="Transcript"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 10px',
+              ...headerBtn,
               background: transcriptOpen ? 'rgba(0, 240, 255, 0.08)' : 'transparent',
-              border: '1px solid rgba(255,255,255,0.1)',
               color: transcriptOpen ? 'var(--soda-accent)' : 'var(--soda-muted)',
-              fontFamily: GROTESK,
-              fontSize: 10,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              cursor: 'pointer',
             }}
           >
-            <FileText size={12} />
-            Log
+            <FileText size={isPhone ? 16 : 12} />
+            {!isPhone && 'Log'}
           </button>
 
           <button
             onClick={() => { setRightTab('progress'); setRightOpen(true); if (active) showProgress() }}
             title="Progress"
+            aria-label="Progress dashboard"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 10px',
+              ...headerBtn,
               background: rightOpen && rightTab === 'progress'
                 ? 'rgba(0, 240, 255, 0.08)' : 'transparent',
-              border: '1px solid rgba(255,255,255,0.1)',
               color: rightOpen && rightTab === 'progress'
                 ? 'var(--soda-accent)' : 'var(--soda-muted)',
-              fontFamily: GROTESK,
-              fontSize: 10,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              cursor: 'pointer',
             }}
           >
-            <BarChart3 size={12} />
-            Progress
+            <BarChart3 size={isPhone ? 16 : 12} />
+            {!isPhone && 'Progress'}
           </button>
         </div>
       </header>
@@ -336,13 +370,20 @@ export default function App() {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 20,
-        padding: '32px 20px 40px',
+        justifyContent: isPhone && sheetOpen ? 'flex-start' : 'center',
+        gap: isPhone ? 14 : 20,
+        padding: isPhone ? '16px 14px 20px' : '32px 20px 40px',
         position: 'relative',
         zIndex: 1,
       }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 30 }}>
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          minHeight: 30,
+        }}>
           {active && test?.part && (
             <div style={{
               padding: '5px 12px',
@@ -379,15 +420,16 @@ export default function App() {
           idle={!active}
         />
 
-        <div style={{
-          fontFamily: GROTESK,
-          fontSize: 13,
-          letterSpacing: '0.06em',
-          color: 'var(--soda-muted)',
-          textAlign: 'center',
-          maxWidth: 520,
-          minHeight: 20,
-        }}>
+        {!isPhone || !sheetOpen ? (
+          <div style={{
+            fontFamily: GROTESK,
+            fontSize: isPhone ? 12 : 13,
+            letterSpacing: '0.06em',
+            color: 'var(--soda-muted)',
+            textAlign: 'center',
+            maxWidth: isPhone ? '100%' : 520,
+            minHeight: 20,
+          }}>
           {!connected
             ? 'Connecting to the examiner server...'
             : !active
@@ -397,9 +439,17 @@ export default function App() {
                 : phase === 'evaluating' || activeTool
                   ? 'Scoring your answer against the four IELTS criteria...'
                   : 'Answer out loud. The examiner will ask the next question automatically.'}
-        </div>
+          </div>
+        ) : null}
 
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div style={{
+          display: 'flex',
+          gap: isPhone ? 8 : 10,
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          width: '100%',
+          maxWidth: isPhone ? 420 : undefined,
+        }}>
           {!active ? (
             <button
               onClick={start}
@@ -407,13 +457,16 @@ export default function App() {
               style={{
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: 10,
-                padding: '14px 30px',
+                minHeight: 52,
+                padding: isPhone ? '0 24px' : '14px 30px',
+                margin: '0 auto',
                 background: connected ? 'rgba(0, 240, 255, 0.1)' : 'rgba(255,255,255,0.03)',
                 border: `1px solid ${connected ? 'var(--soda-accent)' : 'rgba(255,255,255,0.12)'}`,
                 color: connected ? 'var(--soda-accent)' : 'var(--soda-muted)',
                 fontFamily: GROTESK,
-                fontSize: 13,
+                fontSize: isPhone ? 12 : 13,
                 fontWeight: 600,
                 letterSpacing: '0.16em',
                 textTransform: 'uppercase',
@@ -429,18 +482,11 @@ export default function App() {
               <button
                 onClick={endTest}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '12px 22px',
+                  ...actionBtn,
+                  padding: isPhone ? '0 14px' : '12px 22px',
                   background: 'rgba(0, 240, 255, 0.08)',
                   border: '1px solid var(--soda-accent)',
                   color: 'var(--soda-accent)',
-                  fontFamily: GROTESK,
-                  fontSize: 11,
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
-                  cursor: 'pointer',
                 }}
               >
                 <BarChart3 size={14} />
@@ -449,18 +495,10 @@ export default function App() {
               <button
                 onClick={showProgress}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '12px 18px',
+                  ...actionBtn,
                   background: 'transparent',
                   border: '1px solid rgba(255,255,255,0.12)',
                   color: 'var(--soda-muted)',
-                  fontFamily: GROTESK,
-                  fontSize: 11,
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
-                  cursor: 'pointer',
                 }}
               >
                 <BarChart3 size={14} />
@@ -469,18 +507,10 @@ export default function App() {
               <button
                 onClick={stop}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '12px 18px',
+                  ...actionBtn,
                   background: 'transparent',
                   border: '1px solid rgba(255, 76, 102, 0.4)',
                   color: 'var(--soda-error)',
-                  fontFamily: GROTESK,
-                  fontSize: 11,
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
-                  cursor: 'pointer',
                 }}
               >
                 <Square size={13} />
@@ -502,10 +532,11 @@ export default function App() {
       </main>
 
       <footer style={{
-        padding: '10px 20px',
+        padding: isPhone ? '8px 12px' : '10px 20px',
+        paddingBottom: `max(${isPhone ? 8 : 10}px, env(safe-area-inset-bottom))`,
         borderTop: '1px solid rgba(255,255,255,0.06)',
         fontFamily: MONO,
-        fontSize: 9,
+        fontSize: isPhone ? 8 : 9,
         letterSpacing: '0.08em',
         color: 'var(--soda-muted)',
         textAlign: 'center',
@@ -515,7 +546,7 @@ export default function App() {
 
       <SlidePanel
         visible={transcriptOpen}
-        direction="left"
+        direction={isPhone ? 'bottom' : 'left'}
         title="TRANSCRIPT"
         icon={<FileText size={12} />}
         onClose={() => setTranscriptOpen(false)}
@@ -525,7 +556,7 @@ export default function App() {
 
       <SlidePanel
         visible={rightOpen}
-        direction="right"
+        direction={isPhone ? 'bottom' : 'right'}
         title={rightTab.toUpperCase()}
         icon={<Mic size={12} />}
         onClose={() => setRightOpen(false)}
@@ -545,14 +576,15 @@ export default function App() {
               onClick={() => setRightTab(id)}
               style={{
                 flex: 1,
-                padding: '9px 4px',
+                minHeight: isPhone ? 44 : undefined,
+                padding: isPhone ? '12px 2px' : '9px 4px',
                 background: rightTab === id ? 'rgba(0, 240, 255, 0.08)' : 'transparent',
                 border: 'none',
                 borderBottom: rightTab === id
                   ? '2px solid var(--soda-accent)' : '2px solid transparent',
                 color: rightTab === id ? 'var(--soda-accent)' : 'var(--soda-muted)',
                 fontFamily: GROTESK,
-                fontSize: 9,
+                fontSize: isPhone ? 10 : 9,
                 letterSpacing: '0.1em',
                 textTransform: 'uppercase',
                 cursor: 'pointer',
@@ -596,6 +628,7 @@ export default function App() {
                   <button
                     onClick={showProgress}
                     style={{
+                      minHeight: 44,
                       padding: '10px 16px',
                       background: 'rgba(0, 240, 255, 0.08)',
                       border: '1px solid var(--soda-accent)',
@@ -623,7 +656,7 @@ export default function App() {
         <div style={{
           position: 'fixed',
           left: '50%',
-          bottom: 24,
+          bottom: `calc(${isPhone ? 12 : 24}px + env(safe-area-inset-bottom))`,
           transform: 'translateX(-50%)',
           display: 'flex',
           alignItems: 'center',
@@ -633,26 +666,31 @@ export default function App() {
           border: '1px solid rgba(255, 68, 102, 0.5)',
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
           zIndex: 60,
-          maxWidth: 'calc(100vw - 40px)',
+          maxWidth: 'calc(100vw - 24px)',
         }}>
           <span style={{
             fontFamily: GROTESK,
-            fontSize: 12,
+            fontSize: isPhone ? 11 : 12,
             color: 'var(--soda-error)',
           }}>
             {error}
           </span>
           <button
             onClick={clearError}
+            aria-label="Dismiss error"
             style={{
               background: 'transparent',
               border: 'none',
               color: 'var(--soda-muted)',
               cursor: 'pointer',
               display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: 44,
+              minHeight: 44,
             }}
           >
-            <X size={14} />
+            <X size={16} />
           </button>
         </div>
       )}

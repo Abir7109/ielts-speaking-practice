@@ -1,12 +1,25 @@
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useEffect } from 'react'
 
-export default function useAudioPlayback() {
+// Examiner audio arrives in ~100ms chunks, so the schedule goes quiet in short
+// bursts mid-sentence. Only call the turn finished once the queue has been empty
+// for longer than a plausible chunk gap — a false "drained" would reopen the mic
+// over the examiner's own voice.
+const DRAIN_GUARD_SECONDS = 0.35
+const DRAIN_POLL_MS = 100
+
+export default function useAudioPlayback({ onDrained } = {}) {
   const audioCtxRef = useRef(null)
   const audioNextTime = useRef(0)
   const audioReadyRef = useRef(false)
+  const playEndRef = useRef(0)
+  const drainedRef = useRef(true)
+  const onDrainedRef = useRef(onDrained)
+  onDrainedRef.current = onDrained
 
   const stopAudio = useCallback(() => {
     audioNextTime.current = 0
+    playEndRef.current = 0
+    drainedRef.current = true
     if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
       audioCtxRef.current.close().catch(() => {})
       audioCtxRef.current = null
@@ -60,10 +73,23 @@ export default function useAudioPlayback() {
       }
       source.start(startTime)
       audioNextTime.current = startTime + buffer.duration
+      playEndRef.current = audioNextTime.current
+      drainedRef.current = false
     } catch (e) {
       console.warn('[Audio] Playback error:', e)
     }
   }, [initAudioCtx])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const ctx = audioCtxRef.current
+      if (!ctx || drainedRef.current) return
+      if (ctx.currentTime < playEndRef.current + DRAIN_GUARD_SECONDS) return
+      drainedRef.current = true
+      if (onDrainedRef.current) onDrainedRef.current()
+    }, DRAIN_POLL_MS)
+    return () => clearInterval(id)
+  }, [])
 
   const playConnectionBeep = useCallback(() => {
     if (audioReadyRef.current) return

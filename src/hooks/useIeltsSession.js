@@ -11,6 +11,11 @@ const TAB_BY_PANEL = {
   IELTSReport: 'report',
 }
 
+// Below this width both panels render as full-width bottom sheets, so only one of
+// them can be visible at a time — opening the other must dismiss the first.
+const SHEET_WIDTH = 768
+const isSheetLayout = () => window.innerWidth <= SHEET_WIDTH
+
 function getClientId() {
   try {
     let id = window.localStorage.getItem(CLIENT_ID_KEY)
@@ -47,8 +52,19 @@ export default function useIeltsSession() {
   const activeRef = useRef(false)
   activeRef.current = active
 
-  const { initAudioCtx, playPcmBytes, playConnectionBeep, stopAudio } = useAudioPlayback()
+  const onPlaybackDrained = useCallback(() => {
+    if (socket.connected) socket.emit('playback_drained')
+    setSpeaking(prev => (prev === 'model' ? 'idle' : prev))
+  }, [])
+
+  const { initAudioCtx, playPcmBytes, playConnectionBeep, stopAudio } = useAudioPlayback({ onDrained: onPlaybackDrained })
   const mic = useBrowserMic(socket)
+
+  // On phones both panels are the same full-width sheet, so they cannot share the
+  // screen. The question/feedback panel wins; the transcript steps aside.
+  useEffect(() => {
+    if (isSheetLayout() && transcriptOpen && rightOpen) setTranscriptOpen(false)
+  }, [transcriptOpen, rightOpen])
 
   useEffect(() => {
     const pushTranscript = (sender, text, final = false) => {
@@ -220,7 +236,9 @@ export default function useIeltsSession() {
     playConnectionBeep()
     await mic.start()
     setActive(true)
-    setTranscriptOpen(true)
+    // The transcript is a convenience surface; on a phone it would cover the orb
+    // and the Stop button at the exact moment the candidate needs to speak.
+    setTranscriptOpen(!isSheetLayout())
     if (socket.connected) {
       socket.emit('start_audio', { client_id: getClientId() })
     } else {

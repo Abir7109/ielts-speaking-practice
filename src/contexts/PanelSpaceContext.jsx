@@ -26,18 +26,20 @@ export function PanelSpaceProvider({ children }) {
     let offsetX = 0
     let offsetY = 0
     const vw = window.innerWidth
+    // 768 must match the .slide-panel-bottom sheet breakpoint in main.css: below it
+    // panels span the full viewport, so a horizontal nudge would push them offscreen.
     if (direction === 'top') {
       if (visibleDirections.has('right')) {
-        offsetX = vw < 640 ? 0 : -(PANEL_RIGHT + 40)
+        offsetX = vw < 768 ? 0 : -(PANEL_RIGHT + 40)
       } else {
-        offsetX = vw < 640 ? 0 : vw < 800 ? 80 : vw < 1024 ? 120 : 160
+        offsetX = vw < 768 ? 0 : vw < 800 ? 80 : vw < 1024 ? 120 : 160
       }
     }
     if (direction === 'bottom') {
       if (visibleDirections.has('left')) {
-        offsetX = vw < 640 ? 0 : PANEL_LEFT + 40
+        offsetX = vw < 768 ? 0 : PANEL_LEFT + 40
       } else {
-        offsetX = vw < 640 ? 0 : vw < 800 ? 80 : vw < 1024 ? 140 : 200
+        offsetX = vw < 768 ? 0 : vw < 800 ? 80 : vw < 1024 ? 140 : 200
       }
     }
     return { offsetX, offsetY }
