@@ -188,6 +188,19 @@ async def browser_audio(sid, data):
     session.feed_browser_audio(pcm)
 
 
+@sio.on("playback_drained")
+async def playback_drained(sid, data=None):
+    """Browser finished playing the examiner's audio — reopen the mic now.
+
+    The client is the only party that knows when playback truly ends, so it owns
+    the end-of-turn signal instead of a guessed server-side silence timeout.
+    """
+    session = sessions.get(sid)
+    if session:
+        session.notify_playback_drained()
+    return {"ok": True}
+
+
 # ── UI-triggered tools (same 6-tool world, model narrates result) ──
 
 @sio.on("run_ielts_tool")

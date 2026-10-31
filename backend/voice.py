@@ -42,6 +42,18 @@ EVAL_LIMIT_PER_HOUR = 30
 MAX_RETRIES = 10
 SPEECH_TOOLS = {"start_test", "next_question", "repeat_question", "finish_test"}
 
+# Fallback only: the browser reports the exact moment its playback queue empties
+# (see playback_drained), which clears the mic gate immediately. This timer covers
+# a lost socket signal — it must stay short enough that a candidate is never left
+# talking to a closed microphone.
+SILENCE_FALLBACK_SECONDS = 1.5
+# A scripted question is realistically spoken inside this window; after it the
+# transcript-suppression flag is dropped so live text can never be muted forever.
+SCRIPT_TRANSCRIPT_MAX_AGE = 90.0
+# next_question called sooner than this after the question went out means the model
+# moved on before the candidate had a chance to speak — not a missing answer.
+PREMATURE_CALL_SECONDS = 12.0
+
 _GEMINI_CLIENT = None
 
 
@@ -83,6 +95,14 @@ class VoiceSession:
         self._last_output_transcription = ""
         self._script_transcript_active = False
         self._script_transcript_seen = False
+        self._script_transcript_at = 0.0
+
+        # Silence clock for the mic gate, shared between play_audio (writes) and
+        # receive_audio (re-arms it after a tool result). Must be an instance
+        # attribute: a local goes stale across a slow tool call and the gate then
+        # flings open while the examiner is still talking.
+        self._last_audio_time = time.monotonic()
+        self._question_asked_at = 0.0
 
         # candidate answer capture (owned by backend, never model-supplied)
         self._answer_text = ""
@@ -139,10 +159,11 @@ class VoiceSession:
         # echo-safe: drop mic while the model speaks
         if self._model_is_speaking or self._tools_running:
             return
-        # A new candidate turn begins — stop suppressing model transcript text.
-        self._script_transcript_active = False
-        self._script_transcript_seen = False
-        self._last_output_transcription = ""
+        # Scripted-question transcript suppression is NOT reset here. A mic frame
+        # arriving in the gap before the model starts generating would unmask its
+        # live output text, and the same question would land in the transcript twice
+        # (once verbatim from the tool, once as the model paraphrases it). The
+        # suppression is retired by the model's own turn_complete instead.
         try:
             self.audio_queue.put_nowait({"data": data, "mime_type": "audio/pcm"})
         except asyncio.QueueFull:
@@ -153,6 +174,27 @@ class VoiceSession:
         if now - self._last_mic_emit >= 0.1:
             self._last_mic_emit = now
             self._emit_now("mic_level", {"level": _rms_level(data)})
+
+    def notify_playback_drained(self):
+        """The browser's audio queue is empty — the examiner has stopped talking.
+
+        This is the accurate end-of-speech signal (the server only ever knows when
+        it *sent* the last chunk, not when the candidate heard it), so the
+        microphone opens the moment the question is finished rather than after a
+        guessed silence timeout.
+
+        Transcript suppression is deliberately left alone: a network stall can empty
+        the browser queue while the model is still talking, and unmasking its live
+        text early is what duplicates a question in the transcript.
+        """
+        if self.stop_event.is_set():
+            return
+        if not self._model_is_speaking:
+            return
+        self._model_is_speaking = False
+        self._last_audio_time = time.monotonic()
+        self._emit_now("speaking_state", {"state": "idle"})
+        log.debug("[TURN] playback drained — mic reopened")
 
     # ── answer capture ──────────────────────────────────────────
 
@@ -205,6 +247,29 @@ class VoiceSession:
                 self._part_pcm.extend(gap)
         self._reset_answer_buffers()
         return True
+
+    def _no_answer_guidance(self) -> str:
+        """Reply for next_question when nothing was captured for the live question.
+
+        Returning "ask the candidate to answer it again" made the examiner read the
+        same question twice, which is what a candidate hears as a broken turn. Split
+        the two causes instead: a call seconds after the question went out means the
+        examiner moved on before the candidate could speak, not that they answered
+        badly.
+        """
+        asked = self._question_asked_at
+        if asked and time.monotonic() - asked < PREMATURE_CALL_SECONDS:
+            return (
+                "The candidate has not had time to answer yet — you moved on too early. "
+                "Do NOT repeat, rephrase or re-read the question, and do NOT ask a new "
+                "one. Say only \"Take your time.\", then stay silent while the candidate "
+                "speaks."
+            )
+        return (
+            "Nothing was recorded for that question. Encourage the candidate once to "
+            "say a few words in their own words. Do NOT repeat or re-read the question "
+            "text — call it \"that question\" — and do not move on to a new question."
+        )
 
     async def _evaluate_current_part(self) -> dict | None:
         ex = self.examiner
@@ -333,6 +398,7 @@ class VoiceSession:
                     self._model_is_speaking = False
                     self._tools_running = False
                     self._last_tool_start = 0.0
+                    self._last_audio_time = time.monotonic()
                     self._processed_fc_ids.clear()
 
                     tg.create_task(self.send_audio())
@@ -439,14 +505,13 @@ class VoiceSession:
         _BATCH_TARGET = 4800
         _BATCH_MAX_WAIT = 0.08
         _last_flush = asyncio.get_event_loop().time()
-        _last_audio_time = time.monotonic()
-        _SILENCE_THRESHOLD = 4.0
+        self._last_audio_time = time.monotonic()
         was_tools_running = False
 
         while not self.stop_event.is_set():
             try:
                 data = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
-                _last_audio_time = time.monotonic()
+                self._last_audio_time = time.monotonic()
                 was_tools_running = bool(self._tools_running)
                 await self._emit("mic_level", {"level": _rms_level(data)})
                 _batch_buf.extend(data)
@@ -462,12 +527,14 @@ class VoiceSession:
                     _batch_buf.clear()
                     _last_flush = asyncio.get_event_loop().time()
 
-                elapsed_silence = time.monotonic() - _last_audio_time
+                elapsed_silence = time.monotonic() - self._last_audio_time
                 if self._tools_running:
                     was_tools_running = True
                 elif was_tools_running and elapsed_silence > 1.0:
                     was_tools_running = False
-                elif self._model_is_speaking and elapsed_silence >= _SILENCE_THRESHOLD:
+                elif self._model_is_speaking and elapsed_silence >= SILENCE_FALLBACK_SECONDS:
+                    # Reached only when the browser's playback_drained signal is
+                    # lost; normally the client closes this gap in ~50ms.
                     self._model_is_speaking = False
                     await self._emit("speaking_state", {"state": "idle"})
 
@@ -507,9 +574,14 @@ class VoiceSession:
                         if response.server_content.output_transcription:
                             transcript = response.server_content.output_transcription.text
                             if self._script_transcript_active:
-                                # The exact tool script was already emitted; the model is
-                                # now speaking it. Suppress the duplicate live transcript.
-                                self._script_transcript_seen = True
+                                if time.monotonic() - self._script_transcript_at > SCRIPT_TRANSCRIPT_MAX_AGE:
+                                    self._script_transcript_active = False
+                                    self._script_transcript_seen = False
+                                    self._last_output_transcription = ""
+                                else:
+                                    # The exact tool script was already emitted; the model is
+                                    # now speaking it. Suppress the duplicate live transcript.
+                                    self._script_transcript_seen = True
                             elif transcript and transcript != self._last_output_transcription:
                                 delta = transcript
                                 if transcript.startswith(self._last_output_transcription):
@@ -519,12 +591,13 @@ class VoiceSession:
                                     await self._emit("transcription", {"sender": "Examiner", "text": delta})
 
                         if response.server_content.turn_complete:
-                            if self._script_transcript_active and self._script_transcript_seen:
+                            if self._script_transcript_active:
+                                # This model turn is over — whatever was just spoken has been
+                                # fully heard, so the scripted copy is the only version of it
+                                # the transcript needs.
                                 self._script_transcript_active = False
                                 self._script_transcript_seen = False
-                                self._last_output_transcription = ""
-                            elif not self._script_transcript_active:
-                                self._last_output_transcription = ""
+                            self._last_output_transcription = ""
 
                     if response.tool_call:
                         function_responses = []
@@ -581,6 +654,8 @@ class VoiceSession:
                                     "sender": "Examiner", "text": script_text, "final": True,
                                 })
                                 self._script_transcript_active = True
+                                self._script_transcript_at = time.monotonic()
+                                self._script_transcript_seen = False
                                 self._last_output_transcription = ""
                             try:
                                 await asyncio.wait_for(
@@ -594,6 +669,10 @@ class VoiceSession:
                                 break
                             self._model_is_speaking = True
                             self._tools_running = False
+                            # A tool call can run for tens of seconds (part scoring). Without
+                            # re-arming here, play_audio sees a stale clock and opens the mic
+                            # gate before the examiner has said a word of the new question.
+                            self._last_audio_time = time.monotonic()
                         else:
                             self._tools_running = False
 
@@ -666,14 +745,12 @@ class VoiceSession:
             self._last_report = None
             await self._emit_state("answering")
             self._maybe_start_prep_timer(payload)
+            self._question_asked_at = time.monotonic()
             return ex.spoken_question(payload)
 
         if name == "next_question":
             if ex.awaiting_answer and not self._stash_current_answer(skip_if_empty=False):
-                return (
-                    "I didn't catch a clear answer to that question. "
-                    "Ask the candidate to answer it again — do NOT move on."
-                )
+                return self._no_answer_guidance()
             feedback = ""
             if ex.current_part_finished() and ex.part not in ex.part_evaluations:
                 ev = await self._evaluate_current_part()
@@ -684,12 +761,14 @@ class VoiceSession:
                 self._reset_answer_buffers()
                 await self._emit_state("answering")
                 self._maybe_start_prep_timer(payload)
+                self._question_asked_at = time.monotonic()
                 return (feedback + " " + ex.spoken_question(payload)).strip()
             return await self._finish_inner()
 
         if name == "repeat_question":
             if ex.current_payload is None:
                 return "No test is running yet. Greet the candidate and ask what kind of test they want."
+            self._question_asked_at = time.monotonic()
             return ex.spoken_repeat()
 
         if name == "finish_test":
